@@ -1,0 +1,245 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* Prevent browser touch navigation interfering with canvas */
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* ── Canvas layers ───────────────────────────────────────────────────────── */
+
+.canvas-container {
+  position: fixed;
+  inset: 0;
+  width: 100dvw;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.paper-bg {
+  position: absolute;
+  inset: 0;
+  background-color: #fafaf8;
+  /* Subtle dot-grid paper feel */
+  background-image: radial-gradient(circle, #d1cfc8 1px, transparent 1px);
+  background-size: 24px 24px;
+  pointer-events: none;
+}
+
+.canvas-layer {
+  position: absolute;
+  inset: 0;
+  display: block;
+  /* Prevent all browser default touch/stylus behaviours on canvas */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.committed-layer {
+  /* Below active layer */
+  z-index: 1;
+  pointer-events: none;
+}
+
+.active-layer {
+  /* On top — receives ALL pointer events */
+  z-index: 2;
+  cursor: crosshair;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  position: fixed;
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 8px;
+  background: rgba(20, 20, 24, 0.82);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  /* Touch events on toolbar should not propagate to canvas */
+  touch-action: manipulation;
+}
+
+.toolbar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-divider {
+  width: 28px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  outline: none;
+}
+
+.toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.toolbar-btn.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.3);
+}
+
+.toolbar-btn:active {
+  transform: scale(0.92);
+}
+
+.toolbar-btn:disabled {
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Color swatches ──────────────────────────────────────────────────────── */
+
+.color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.13s ease, box-shadow 0.13s ease;
+  outline: none;
+}
+
+.color-swatch:hover {
+  transform: scale(1.18);
+}
+
+.color-swatch:active {
+  transform: scale(0.9);
+}
+
+/* ── Size slider ────────────────────────────────────────────────────────── */
+
+.size-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.2);
+  outline: none;
+  cursor: pointer;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 4px;
+  height: 60px;
+}
+
+.size-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+
+.size-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  border: none;
+}
+
+/* ── Zoom badge ──────────────────────────────────────────────────────────── */
+
+.zoom-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.03em;
+  padding: 4px 0;
+}
+
+/* ── Mobile: move toolbar to bottom centre on narrow screens ─────────────── */
+
+@media (max-width: 480px) {
+  .toolbar {
+    top: auto;
+    left: 50%;
+    bottom: 20px;
+    transform: translateX(-50%);
+    flex-direction: row;
+    padding: 8px 12px;
+    border-radius: 24px;
+    gap: 4px;
+    width: auto;
+    max-width: calc(100vw - 32px);
+    overflow-x: auto;
+  }
+
+  .toolbar-group {
+    flex-direction: row;
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: 28px;
+    margin: 0 4px;
+  }
+
+  .size-slider {
+    writing-mode: horizontal-tb;
+    direction: ltr;
+    width: 56px;
+    height: 4px;
+  }
+}
