@@ -10,28 +10,31 @@ export default function Home() {
   return (
     <main className="fixed inset-0 overflow-hidden bg-neutral-200 dark:bg-neutral-900 select-none touch-none">
       {/* 
-        The Stack:
-        - Layer 1: Background (desk + page + grid)
-        - Layer 2: Committed strokes (persistent data)
-        - Layer 3: Active stroke (real-time in-progress line)
-        - Layer 4: Cursor (eraser circle, overlays)
+        Defining a single relative container for the 4 absolute canvas layers.
+        Stacking order:
+        1. Background (Desk, Page, Grid, Page Separators)
+        2. Committed Strokes (The note content)
+        3. Active Stroke (The stroke currently being drawn)
+        4. Cursor (Pen tip indicator or Eraser circle)
       */}
-      <canvas
-        ref={bgCanvasRef}
-        className="absolute inset-0 block"
-      />
-      <canvas
-        ref={committedCanvasRef}
-        className="absolute inset-0 block pointer-events-none"
-      />
-      <canvas
-        ref={activeCanvasRef}
-        className="absolute inset-0 block cursor-none pointer-events-auto"
-      />
-      <canvas
-        ref={cursorCanvasRef}
-        className="absolute inset-0 block pointer-events-none"
-      />
+      <div className="relative w-full h-full">
+        <canvas
+          ref={bgCanvasRef}
+          className="absolute top-0 left-0 w-full h-full z-10"
+        />
+        <canvas
+          ref={committedCanvasRef}
+          className="absolute top-0 left-0 w-full h-full pointer-events-none z-20"
+        />
+        <canvas
+          ref={activeCanvasRef}
+          className="absolute top-0 left-0 w-full h-full cursor-none pointer-events-auto z-30"
+        />
+        <canvas
+          ref={cursorCanvasRef}
+          className="absolute top-0 left-0 w-full h-full pointer-events-none z-40"
+        />
+      </div>
 
       <Toolbar onUndo={undo} onRedo={redo} onResetZoom={fitPage} />
     </main>

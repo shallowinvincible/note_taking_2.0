@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useToolStore } from '@/store/toolStore'
+import { useToolStore, LIGHT_DEFAULT, DARK_DEFAULT } from '@/store/toolStore'
 import { useCanvasStore } from '@/store/canvasStore'
 import { 
   Pencil, 
@@ -12,7 +12,8 @@ import {
   Layout, 
   Check,
   ChevronDown,
-  Maximize
+  Pointer,
+  PenTool
 } from 'lucide-react'
 import type { Background } from '@/types/stroke'
 
@@ -27,6 +28,7 @@ export function Toolbar({
 }) {
   const { 
     activeTool, setTool, 
+    inputMode, setInputMode,
     penColor, setPenColor, 
     penWidth, setPenWidth,
     background, setBackground,
@@ -39,7 +41,8 @@ export function Toolbar({
   const [showColorMenu, setShowColorMenu] = useState(false)
 
   const colors = [
-    '#1a1a1a', '#ef4444', '#3b82f6', '#22c55e', 
+    darkMode ? DARK_DEFAULT : LIGHT_DEFAULT,
+    '#ef4444', '#3b82f6', '#22c55e', 
     '#f97316', '#a855f7', '#ec4899', '#ffffff'
   ]
 
@@ -65,9 +68,29 @@ export function Toolbar({
         <button 
           onClick={(e) => { e.stopPropagation(); onResetZoom(); }}
           className="px-3 py-1.5 text-[11px] font-black font-mono bg-neutral-100 dark:bg-white/10 rounded-full hover:bg-neutral-200 dark:hover:bg-white/20 transition-all border border-transparent active:scale-95"
-          title="Reset Zoom to Fit (Click to Reset)"
+          title="Reset Zoom to Fit"
         >
           {Math.round(zoom * 100)}%
+        </button>
+      </div>
+
+      <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-3" />
+
+      {/* Input Mode Toggle (Stylus vs Finger) */}
+      <div className="flex items-center bg-neutral-100 dark:bg-white/5 rounded-full p-1 gap-1">
+        <button
+          onClick={() => setInputMode('stylus')}
+          className={`p-1.5 rounded-full transition-all ${inputMode === 'stylus' ? 'bg-white dark:bg-white/10 shadow-sm text-blue-500' : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}`}
+          title="Stylus Mode (One finger pan/scroll)"
+        >
+          <PenTool size={16} />
+        </button>
+        <button
+          onClick={() => setInputMode('finger')}
+          className={`p-1.5 rounded-full transition-all ${inputMode === 'finger' ? 'bg-white dark:bg-white/10 shadow-sm text-blue-500' : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}`}
+          title="Finger Mode (One finger draw)"
+        >
+          <Pointer size={16} />
         </button>
       </div>
 
@@ -145,7 +168,7 @@ export function Toolbar({
                   className={`w-10 h-10 rounded-full border-4 transition-all hover:scale-110 flex items-center justify-center ${penColor === c ? 'border-blue-500 shadow-md' : 'border-transparent shadow-sm'}`}
                   style={{ backgroundColor: c }}
                 >
-                   {penColor === c && <Check size={16} className={c === '#ffffff' ? 'text-black' : 'text-white'} />}
+                   {penColor === c && <Check size={16} className={c === '#ffffff' || c === DARK_DEFAULT ? 'text-black' : 'text-white'} />}
                 </button>
               ))}
             </div>
@@ -180,7 +203,7 @@ export function Toolbar({
         )}
       </div>
 
-      <div className="w-px h-6 bg-neutral-200 dark:bg-neutral-800 mx-2" />
+      <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-2" />
 
       {/* Undo/Redo */}
       <div className="flex items-center gap-1">
@@ -202,7 +225,7 @@ export function Toolbar({
         </button>
       </div>
 
-      <div className="w-px h-6 bg-neutral-200 dark:bg-neutral-800 mx-2" />
+      <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-2" />
 
       {/* Dark Mode */}
       <button
