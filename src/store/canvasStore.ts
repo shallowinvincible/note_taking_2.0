@@ -1,26 +1,29 @@
 import { create } from 'zustand'
 
-interface CanvasStore {
-  zoomLevel: number
+interface CanvasState {
+  zoom: number
   panX: number
   panY: number
+  pageWidth: number
+  pageHeight: number
   canUndo: boolean
   canRedo: boolean
+  
   setTransform: (zoom: number, panX: number, panY: number) => void
-  setUndoRedo: (canUndo: boolean, canRedo: boolean) => void
+  setPageHeight: (height: number) => void
+  setUndoRedo: (undo: boolean, redo: boolean) => void
 }
 
-/**
- * Zustand store is for React UI display only (toolbar zoom badge, undo button states).
- * The canvas engine holds its own mutable TransformSystem and UndoRedoStack
- * to avoid any React re-renders during a stroke.
- */
-export const useCanvasStore = create<CanvasStore>((set) => ({
-  zoomLevel: 1.0,
+export const useCanvasStore = create<CanvasState>((set) => ({
+  zoom: 1.0,
   panX: 0,
   panY: 0,
+  pageWidth: 795, // A4 Portrait at 96 DPI is ~794px, user said 795
+  pageHeight: 1122,
   canUndo: false,
   canRedo: false,
-  setTransform: (zoomLevel, panX, panY) => set({ zoomLevel, panX, panY }),
-  setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),
+
+  setTransform: (zoom, panX, panY) => set({ zoom, panX, panY }),
+  setPageHeight: (pageHeight) => set({ pageHeight }),
+  setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo })
 }))

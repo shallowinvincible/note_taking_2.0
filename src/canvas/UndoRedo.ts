@@ -1,59 +1,73 @@
 import type { Stroke } from '@/types/stroke'
 
-export type UndoRedoCallback = (strokes: Stroke[]) => void
+export type Action = 
+  | { type: 'ADD_STROKE'; stroke: Stroke }
+  | { type: 'ERASE_STROKES'; strokes: Stroke[] }
 
-/**
- * UndoRedoStack — in-memory only, no IndexedDB.
- *
- * The committed strokes array is the single source of truth.
- * Undo pops the last stroke onto a redo stack.
- * Redo pops from the redo stack back into committed.
- */
 export class UndoRedoStack {
-  private committed: Stroke[] = []
-  private redoStack: Stroke[] = []
-  private onChange: UndoRedoCallback
+  private undoStack: Action[] = []
+  private redoStack: Action[] = []
+  private strokes: Stroke[] = []
+  private onChange: (strokes: Stroke[]) => void
 
-  constructor(onChange: UndoRedoCallback) {
+  constructor(initialStrokes: Stroke[], onChange: (strokes: Stroke[]) => void) {
+    this.strokes = [...initialStrokes]
     this.onChange = onChange
   }
 
-  push(stroke: Stroke): void {
-    this.committed.push(stroke)
-    // Any new stroke collapses the redo branch
+  push(action: Action) {
+    this.applyAction(action)
+    this.undoStack.push(action)
     this.redoStack = []
-    this.onChange(this.committed)
+    this.onChange(this.strokes)
   }
 
-  undo(): void {
-    if (this.committed.length === 0) return
-    const last = this.committed.pop()!
-    this.redoStack.push(last)
-    this.onChange(this.committed)
+  undo() {
+    const action = this.undoStack.pop()
+    if (!action) return
+    
+    this.revertAction(action)
+    this.redoStack.push(action)
+    this.onChange(this.strokes)
   }
 
-  redo(): void {
-    if (this.redoStack.length === 0) return
-    const stroke = this.redoStack.pop()!
-    this.committed.push(stroke)
-    this.onChange(this.committed)
+  redo() {
+    const action = this.redoStack.pop()
+    if (!action) return
+    
+    this.applyAction(action)
+    this.undoStack.push(action)
+    this.onChange(this.strokes)
   }
 
-  getStrokes(): Stroke[] {
-    return this.committed
+  private applyAction(action: Action) {
+    if (action.type === 'ADD_STROKE') {
+      this.strokes.push(action.stroke)
+    } else if (action.type === 'ERASE_STROKES') {
+      const idsToRemove = action.strokes.map(s => s.id)
+      this.strokes = this.strokes.filter(s => !idsToRemove.includes(s.id))
+    }
   }
 
-  canUndo(): boolean {
-    return this.committed.length > 0
+  private revertAction(action: Action) {
+    if (action.type === 'ADD_STROKE') {
+      this.strokes.pop()
+    } else if (action.type === 'ERASE_STROKES') {
+      // Re-insert erased strokes. For simplicity, we just append them.
+      // Ideally we'd keep their z-index/order.
+      this.strokes = [...this.strokes, ...action.strokes].sort((a,b) => a.createdAt - b.createdAt)
+    }
   }
 
-  canRedo(): boolean {
+  getStrokes() {
+    return this.strokes
+  }
+
+  canUndo() {
+    return this.undoStack.length > 0
+  }
+
+  canRedo() {
     return this.redoStack.length > 0
-  }
-
-  clear(): void {
-    this.committed = []
-    this.redoStack = []
-    this.onChange(this.committed)
   }
 }

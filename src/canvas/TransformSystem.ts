@@ -1,24 +1,19 @@
 /**
  * TransformSystem — owns zoom and pan state.
  *
- * Two coordinate spaces:
- *   World  — where strokes are stored (stable across zoom/pan)
- *   Screen — pixel coordinates on the canvas element
- *
  * World → Screen (rendering):
- *   sx = (wx - panOffset.x) * zoom
- *   sy = (wy - panOffset.y) * zoom
+ *   sx = (wx - panX) * zoom
+ *   sy = (wy - panY) * zoom
  *
- * Screen → World (input — applied to every pointer event before storing):
- *   wx = sx / zoom + panOffset.x
- *   wy = sy / zoom + panOffset.y
+ * Screen → World (input — applied on every pointer event before storing):
+ *   wx = sx / zoom + panX
+ *   wy = sy / zoom + panY
  */
 export class TransformSystem {
   zoom: number = 1.0
   panX: number = 0
   panY: number = 0
 
-  /** Convert a screen-space point to world coordinates. */
   screenToWorld(sx: number, sy: number): { x: number; y: number } {
     return {
       x: sx / this.zoom + this.panX,
@@ -26,7 +21,6 @@ export class TransformSystem {
     }
   }
 
-  /** Convert a world-space point to screen coordinates. */
   worldToScreen(wx: number, wy: number): { x: number; y: number } {
     return {
       x: (wx - this.panX) * this.zoom,
@@ -35,22 +29,34 @@ export class TransformSystem {
   }
 
   /**
-   * Zoom toward a screen-space focal point (pinch centre or wheel position).
-   * Keeps the point under the cursor fixed in world space.
+   * Zoom toward a screen-space focal point.
+   * Keeps the world point under the focal position fixed.
    */
   applyZoom(delta: number, focalScreenX: number, focalScreenY: number): void {
-    const MIN_ZOOM = 0.1
-    const MAX_ZOOM = 10
+    const MIN_ZOOM = 0.2
+    const MAX_ZOOM = 8.0
 
-    // World position under the focal point before zoom
     const worldBefore = this.screenToWorld(focalScreenX, focalScreenY)
-
     this.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * delta))
-
-    // After zoom the same world point must land on the same screen pixel
     const screenAfter = this.worldToScreen(worldBefore.x, worldBefore.y)
     this.panX += (focalScreenX - screenAfter.x) / this.zoom
     this.panY += (focalScreenY - screenAfter.y) / this.zoom
+  }
+
+  /**
+   * Set absolute zoom level toward a screen-space focal point.
+   * Used by pinch-zoom where the raw zoom value is computed externally.
+   */
+  setZoomToward(newZoom: number, focalScreenX: number, focalScreenY: number): void {
+    const MIN_ZOOM = 0.2
+    const MAX_ZOOM = 5.0
+    newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, newZoom))
+
+    const worldX = focalScreenX / this.zoom + this.panX
+    const worldY = focalScreenY / this.zoom + this.panY
+    this.zoom = newZoom
+    this.panX = worldX - focalScreenX / this.zoom
+    this.panY = worldY - focalScreenY / this.zoom
   }
 
   /** Translate pan by screen-space deltas. */
@@ -59,7 +65,23 @@ export class TransformSystem {
     this.panY -= dsy / this.zoom
   }
 
-  /** Reset to 1:1, centred. */
+  /** Scroll vertically only (one-finger / mouse wheel). */
+  applyScrollY(dsy: number): void {
+    this.panY += dsy / this.zoom
+  }
+
+  /**
+   * Initialize transform to fit the page width with padding and center it.
+   */
+  initFitPage(viewportW: number, viewportH: number, pageW: number): void {
+    const padding = 80 // 40px each side
+    const targetZoom = (viewportW - padding) / pageW
+    
+    this.zoom = Math.min(targetZoom, 1.2) // Don't over-zoom on massive screens
+    this.panX = -(viewportW / 2 - (pageW * this.zoom) / 2) / this.zoom
+    this.panY = -40 / this.zoom
+  }
+
   reset(): void {
     this.zoom = 1.0
     this.panX = 0

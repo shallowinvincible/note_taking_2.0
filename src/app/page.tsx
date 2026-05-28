@@ -1,36 +1,39 @@
 'use client'
 
+import React from 'react'
 import { useCanvas } from '@/hooks/useCanvas'
-import Toolbar from '@/components/Toolbar'
+import { Toolbar } from '@/components/Toolbar'
 
-export default function CanvasPage() {
-  const { committedCanvasRef, activeCanvasRef, undo, redo } = useCanvas()
+export default function Home() {
+  const { bgCanvasRef, committedCanvasRef, activeCanvasRef, cursorCanvasRef, undo, redo, fitPage } = useCanvas()
 
   return (
-    <main className="canvas-container">
-      {/* Page background — paper feel */}
-      <div className="paper-bg" />
-
-      {/*
-        Two-layer canvas stack:
-          committed — persisted strokes (only redrawn on undo/redo/zoom/pan)
-          active    — current in-progress stroke (cleared every frame)
-        Active sits on top so it receives all pointer events.
+    <main className="fixed inset-0 overflow-hidden bg-neutral-200 dark:bg-neutral-900 select-none touch-none">
+      {/* 
+        The Stack:
+        - Layer 1: Background (desk + page + grid)
+        - Layer 2: Committed strokes (persistent data)
+        - Layer 3: Active stroke (real-time in-progress line)
+        - Layer 4: Cursor (eraser circle, overlays)
       */}
       <canvas
+        ref={bgCanvasRef}
+        className="absolute inset-0 block"
+      />
+      <canvas
         ref={committedCanvasRef}
-        id="canvas-committed"
-        className="canvas-layer committed-layer"
-        aria-label="Committed strokes"
+        className="absolute inset-0 block pointer-events-none"
       />
       <canvas
         ref={activeCanvasRef}
-        id="canvas-active"
-        className="canvas-layer active-layer"
-        aria-label="Drawing surface"
+        className="absolute inset-0 block cursor-none pointer-events-auto"
+      />
+      <canvas
+        ref={cursorCanvasRef}
+        className="absolute inset-0 block pointer-events-none"
       />
 
-      <Toolbar onUndo={undo} onRedo={redo} />
+      <Toolbar onUndo={undo} onRedo={redo} onResetZoom={fitPage} />
     </main>
   )
 }
