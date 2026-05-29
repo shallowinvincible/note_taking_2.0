@@ -17,7 +17,12 @@ export interface InputHandlerConfig {
   onRenderRequest: () => void
   getActiveTool: () => StrokeTool
   getInputMode: () => 'stylus' | 'finger'
+  isPressureEnabled: () => boolean
+  getPageHeight: () => number
 }
+
+const PAGE_WIDTH_WORLD = 795
+const MIN_POINT_DISTANCE = 1.5 // world units
 
 export class InputHandler {
   private canvas: HTMLCanvasElement
@@ -32,6 +37,8 @@ export class InputHandler {
   private initialZoom: number = 1
   private lastMidX = 0
   private lastMidY = 0
+  
+  public lastPointerEvent: PointerEvent | null = null
 
   constructor(config: InputHandlerConfig) {
     this.canvas = config.canvas
@@ -42,12 +49,45 @@ export class InputHandler {
     this.setupTouchEvents()
   }
 
+  /** Check if a world point is inside the page boundary */
+  private isInsidePage(wx: number, wy: number): boolean {
+    return wx >= 0 && wx <= PAGE_WIDTH_WORLD && 
+           wy >= 0 && wy <= this.config.getPageHeight()
+  }
+
+  /** Clamp a world point to the page boundary */
+  private clampToPage(wx: number, wy: number): { x: number; y: number } {
+    return {
+      x: Math.min(Math.max(wx, 0), PAGE_WIDTH_WORLD),
+      y: Math.min(Math.max(wy, 0), this.config.getPageHeight())
+    }
+  }
+
+  /** Filter points by minimum distance to avoid artifacts */
+  private lastAddedPoint: Point | null = null
+  private shouldAddPoint(newX: number, newY: number): boolean {
+    if (!this.lastAddedPoint) return true
+    const dx = newX - this.lastAddedPoint.x
+    const dy = newY - this.lastAddedPoint.y
+    return Math.sqrt(dx * dx + dy * dy) >= MIN_POINT_DISTANCE
+  }
+
+  /** Determine pressure based on toggle and hardware capability */
+  public getPointPressure(e: PointerEvent): number {
+    if (!this.config.isPressureEnabled()) return 0.5
+    // Fall back to 0.5 if pressure is explicitly 0 (initial contact)
+    return e.pressure > 0 ? e.pressure : 0.5
+  }
+
   private setupPointerEvents() {
     this.canvas.addEventListener('pointerdown', (e) => {
-      // Clear multi-touch count if things got stuck
-      if (this.activeTouchCount < 0) this.activeTouchCount = 0
+      this.lastPointerEvent = e
+      const rect = this.canvas.getBoundingClientRect()
+      const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+      
+      // RESTRICTION: Block stroke start outside page
+      if (!this.isInsidePage(world.x, world.y)) return
 
-      // Pen always takes precedence
       if (e.pointerType === 'pen') {
         this.penIsOnScreen = true
         this.canvas.setPointerCapture(e.pointerId)
@@ -57,60 +97,60 @@ export class InputHandler {
           this.handleEraserMove(e)
         } else {
           this.mode = 'drawing-pen'
+          this.lastAddedPoint = null
           this.config.onStrokeStart(e, false)
         }
         return
       }
 
-      // Touch handling
       if (e.pointerType === 'touch') {
         this.activeTouchCount++
-        
-        // Palm Rejection: If pen is on screen, ignore all touches
         if (this.penIsOnScreen) return
-
+        
         if (this.activeTouchCount > 1) {
-          // Cancel drawing if it was a finger drawing
           if (this.mode === 'drawing-finger') this.config.onStrokeEnd()
           this.mode = this.activeTouchCount === 2 ? 'zooming' : 'idle'
           return
         }
 
-        // Single finger behavior
-        const inputMode = this.config.getInputMode()
-        if (inputMode === 'finger') {
-           if (this.config.getActiveTool() === 'eraser') {
-             this.mode = 'erasing'
-             this.canvas.setPointerCapture(e.pointerId)
-             this.handleEraserMove(e)
-           } else {
-             this.mode = 'drawing-finger'
-             this.canvas.setPointerCapture(e.pointerId)
-             this.config.onStrokeStart(e, true)
-           }
-        } else {
-          // Stylus mode: ignore single finger for drawing
-          this.mode = 'idle'
+        if (this.config.getInputMode() === 'finger') {
+          if (this.config.getActiveTool() === 'eraser') {
+            this.mode = 'erasing'
+          } else {
+            this.mode = 'drawing-finger'
+            this.lastAddedPoint = null
+            this.config.onStrokeStart(e, true)
+          }
+          this.canvas.setPointerCapture(e.pointerId)
         }
       }
 
-      // Mouse handling
       if (e.pointerType === 'mouse') {
         this.canvas.setPointerCapture(e.pointerId)
         if (this.config.getActiveTool() === 'eraser') {
           this.mode = 'erasing'
           this.handleEraserMove(e)
         } else {
-          this.mode = 'drawing-pen' 
+          this.mode = 'drawing-pen'
+          this.lastAddedPoint = null
           this.config.onStrokeStart(e, false)
         }
       }
     })
 
     this.canvas.addEventListener('pointermove', (e) => {
-      if (this.mode === 'idle') return
-
+      this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
+      const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+
+      // Update cursor style
+      if (!this.isInsidePage(world.x, world.y)) {
+        this.canvas.style.cursor = 'not-allowed'
+      } else {
+        this.canvas.style.cursor = 'none'
+      }
+
+      if (this.mode === 'idle') return
 
       if (this.mode === 'erasing') {
         if (e.pointerType === 'touch' && this.penIsOnScreen) return
@@ -121,28 +161,31 @@ export class InputHandler {
       if (this.mode === 'drawing-pen' || this.mode === 'drawing-finger') {
         if (e.pointerType === 'touch' && this.penIsOnScreen) return
         
-        // HIGH FIDELITY: Use coalesced events to get all points between frames
         const events = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e]
         const points: Point[] = []
         
         for (const ev of events) {
-          const world = this.transform.screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top)
-          points.push({
-            x: world.x,
-            y: world.y,
-            pressure: ev.pressure || 0.5
-          })
+          const w = this.transform.screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top)
+          const clamped = this.clampToPage(w.x, w.y)
+          
+          if (this.shouldAddPoint(clamped.x, clamped.y)) {
+            const p = {
+              x: clamped.x,
+              y: clamped.y,
+              pressure: this.getPointPressure(ev)
+            }
+            points.push(p)
+            this.lastAddedPoint = p
+          }
         }
-        this.config.onStrokeMove(points)
+        if (points.length > 0) this.config.onStrokeMove(points)
       }
     })
 
     const handleUp = (e: PointerEvent) => {
       if (e.pointerType === 'pen') {
         this.penIsOnScreen = false
-        if (this.mode === 'drawing-pen' || this.mode === 'erasing') {
-          this.finishInput()
-        }
+        if (this.mode === 'drawing-pen' || this.mode === 'erasing') this.finishInput()
         return
       }
 
@@ -154,9 +197,7 @@ export class InputHandler {
         if (this.activeTouchCount === 0) this.mode = 'idle'
       }
 
-      if (e.pointerType === 'mouse') {
-        this.finishInput()
-      }
+      if (e.pointerType === 'mouse') this.finishInput()
     }
 
     this.canvas.addEventListener('pointerup', handleUp)
@@ -184,15 +225,20 @@ export class InputHandler {
 
       if (e.touches.length === 2 && this.initialPinchDist !== null) {
         const currentDist = this.getPinchDistance(e.touches)
-        const scale = currentDist / this.initialPinchDist
-        const newZoom = this.initialZoom * scale
+        const rawScale = currentDist / this.initialPinchDist
+        // DAMPING: Limit zoom change per frame to 10%
+        const clampedScale = Math.min(Math.max(rawScale, 0.9), 1.1)
+        const newZoom = this.initialZoom * clampedScale
         
         const rect = this.canvas.getBoundingClientRect()
         const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
         
         this.config.onZoom(newZoom, midX, midY)
-        this.config.onPan(midX - this.lastMidX, midY - this.lastMidY)
+        
+        // DAMPING: Apply 0.7 dampening to pan
+        const panDamping = 0.7
+        this.config.onPan((midX - this.lastMidX) * panDamping, (midY - this.lastMidY) * panDamping)
         
         this.lastMidX = midX
         this.lastMidY = midY
@@ -201,19 +247,20 @@ export class InputHandler {
     }, { passive: false })
 
     this.canvas.addEventListener('touchend', (e) => {
-      if (e.touches.length < 2) {
-        this.initialPinchDist = null
-      }
+      if (e.touches.length < 2) this.initialPinchDist = null
     })
 
     this.canvas.addEventListener('wheel', (e) => {
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
-        const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
+        // DAMPING: Reduce zoom sensitivity (0.95/1.05)
+        const zoomFactor = e.deltaY > 0 ? 0.95 : 1.05
         const rect = this.canvas.getBoundingClientRect()
         this.config.onZoom(this.transform.zoom * zoomFactor, e.clientX - rect.left, e.clientY - rect.top)
       } else {
-        this.config.onScroll(e.deltaY)
+        // DAMPING: Reduce scroll sensitivity by 40% (0.6 multiplier)
+        const scrollDampening = 0.6
+        this.config.onScroll(e.deltaY * scrollDampening)
       }
     }, { passive: false })
   }
@@ -226,10 +273,10 @@ export class InputHandler {
 
   private handleEraserMove(e: PointerEvent) {
     const rect = this.canvas.getBoundingClientRect()
-    const screenX = e.clientX - rect.left
-    const screenY = e.clientY - rect.top
-    const world = this.transform.screenToWorld(screenX, screenY)
-    this.config.onEraserMove(world.x, world.y, screenX, screenY)
+    const sx = e.clientX - rect.left
+    const sy = e.clientY - rect.top
+    const w = this.transform.screenToWorld(sx, sy)
+    this.config.onEraserMove(w.x, w.y, sx, sy)
   }
 
   private finishInput() {

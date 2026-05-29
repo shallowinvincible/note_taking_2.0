@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { StrokeTool, Background, Stroke } from '@/types/stroke'
 
 export const LIGHT_DEFAULT = '#1a1a1a'
-export const DARK_DEFAULT = '#fbfbfb' // Using an off-white for better visibility
+export const DARK_DEFAULT = '#fbfbfb'
 
 interface ToolState {
   activeTool: StrokeTool
@@ -10,6 +10,7 @@ interface ToolState {
   penColor: string
   penWidth: number
   eraserRadius: number
+  pressureEnabled: boolean
   background: Background
   darkMode: boolean
   
@@ -18,6 +19,7 @@ interface ToolState {
   setPenColor: (color: string) => void
   setPenWidth: (width: number) => void
   setEraserRadius: (radius: number) => void
+  setPressureEnabled: (enabled: boolean) => void
   setBackground: (bg: Background) => void
   setDarkMode: (dark: boolean) => void
   hydrate: () => void
@@ -31,6 +33,7 @@ export const useToolStore = create<ToolState>((set, get) => ({
   penColor: LIGHT_DEFAULT,
   penWidth: 4,
   eraserRadius: 20,
+  pressureEnabled: true,
   background: 'ruled',
   darkMode: false,
 
@@ -47,12 +50,18 @@ export const useToolStore = create<ToolState>((set, get) => ({
     set({ penWidth })
     if (isClient) localStorage.setItem('penWidth', String(penWidth))
   },
-  setEraserRadius: (eraserRadius) => set({ eraserRadius }),
+  setEraserRadius: (eraserRadius) => {
+    set({ eraserRadius })
+    if (isClient) localStorage.setItem('eraserRadius', String(eraserRadius))
+  },
+  setPressureEnabled: (pressureEnabled) => {
+    set({ pressureEnabled })
+    if (isClient) localStorage.setItem('pressureEnabled', String(pressureEnabled))
+  },
   setBackground: (background) => set({ background }),
   setDarkMode: (darkMode) => {
     const prevDark = get().darkMode
     if (prevDark === darkMode) return
-
     set({ darkMode })
     if (isClient) {
       localStorage.setItem('theme', darkMode ? 'dark' : 'light')
@@ -63,6 +72,8 @@ export const useToolStore = create<ToolState>((set, get) => ({
     if (!isClient) return
     const penColor = localStorage.getItem('penColor')
     const penWidth = localStorage.getItem('penWidth')
+    const eraserRadius = localStorage.getItem('eraserRadius')
+    const pressureEnabled = localStorage.getItem('pressureEnabled')
     const theme = localStorage.getItem('theme')
     const inputMode = localStorage.getItem('inputMode') as 'stylus' | 'finger'
     
@@ -71,6 +82,8 @@ export const useToolStore = create<ToolState>((set, get) => ({
     set((state) => ({
       penColor: penColor || state.penColor,
       penWidth: penWidth ? Number(penWidth) : state.penWidth,
+      eraserRadius: eraserRadius ? Number(eraserRadius) : state.eraserRadius,
+      pressureEnabled: pressureEnabled !== 'false',
       darkMode: isDark,
       inputMode: inputMode || 'stylus'
     }))
@@ -81,13 +94,9 @@ export const useToolStore = create<ToolState>((set, get) => ({
   }
 }))
 
-/**
- * Invert strokes that use the default pen colors when theme changes.
- */
 export function invertStrokes(strokes: Stroke[], goingDark: boolean): Stroke[] {
   const from = goingDark ? LIGHT_DEFAULT : DARK_DEFAULT
   const to = goingDark ? DARK_DEFAULT : LIGHT_DEFAULT
-
   return strokes.map(s => {
     if (s.color === from) {
       return { ...s, color: to }

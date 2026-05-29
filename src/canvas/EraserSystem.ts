@@ -1,53 +1,31 @@
-import type { Stroke } from '@/types/stroke'
+import type { Stroke, BBox } from '@/types/stroke'
 
 /**
  * EraserSystem handles collision detection and animations for the stroke eraser.
  */
 export class EraserSystem {
   pendingErase = new Set<string>()
+  lastScreenPos = { x: -1000, y: -1000 }
+  
   private opacityMap = new Map<string, number>() // strokeId -> current opacity
   private targetOpacityMap = new Map<string, number>() // strokeId -> target opacity
-  private deletedIds = new Set<string>() // IDs that have reached 0 opacity and are ready for official deletion
-  lastScreenPos = { x: -100, y: -100 }
+  private deletedIds = new Set<string>() // IDs that have reached 0 opacity
 
   /**
-   * Checks for hits between eraser circle and strokes.
-   * Uses bounding box pre-filtering for performance.
+   * Checks if the eraser circle intersects any part of the stroke.
+   * Step 1: Bounding box pre-filter (fast)
+   * Step 2: Point proximity check (precise)
    */
   checkHits(worldX: number, worldY: number, radius: number, strokes: Stroke[]): boolean {
     let changed = false
-    const currentHits = new Set<string>()
-
+    const hitRadius = radius // eraserRadius is in world units
+    
     for (const stroke of strokes) {
       if (this.deletedIds.has(stroke.id)) continue
 
-      const { bbox } = stroke
-      const hitRadius = radius + (stroke.width / 2)
-      
-      // Bounding box filter
-      if (
-        worldX + hitRadius < bbox.minX ||
-        worldX - hitRadius > bbox.maxX ||
-        worldY + hitRadius < bbox.minY ||
-        worldY - hitRadius > bbox.maxY
-      ) {
-        continue
-      }
-
-      // Exact point check
-      const rSq = hitRadius * hitRadius
-      let isHit = false
-      for (const p of stroke.points) {
-        const dx = p.x - worldX
-        const dy = p.y - worldY
-        if (dx * dx + dy * dy <= rSq) {
-          isHit = true
-          break
-        }
-      }
+      const isHit = this.eraserHitsStroke(worldX, worldY, hitRadius, stroke)
 
       if (isHit) {
-        currentHits.add(stroke.id)
         if (!this.pendingErase.has(stroke.id)) {
           this.pendingErase.add(stroke.id)
           this.targetOpacityMap.set(stroke.id, 0.3)
@@ -64,14 +42,34 @@ export class EraserSystem {
     return changed
   }
 
-  /**
-   * Animates opacity for smooth fades.
-   * Call this on every render frame.
-   */
+  private eraserOverlapsBoundingBox(ex: number, ey: number, er: number, bbox: BBox): boolean {
+    return ex >= bbox.minX - er &&
+           ex <= bbox.maxX + er &&
+           ey >= bbox.minY - er &&
+           ey <= bbox.maxY + er
+  }
+
+  private eraserHitsStroke(ex: number, ey: number, er: number, stroke: Stroke): boolean {
+    if (!this.eraserOverlapsBoundingBox(ex, ey, er, stroke.bbox)) {
+      return false
+    }
+
+    const hitDistance = er + (stroke.width / 2)
+    const hitDistanceSq = hitDistance * hitDistance
+
+    for (const point of stroke.points) {
+      const dx = point.x - ex
+      const dy = point.y - ey
+      if (dx * dx + dy * dy <= hitDistanceSq) return true
+    }
+
+    return false
+  }
+
   tick(dt: number): boolean {
     let animating = false
-    const FADE_RATE = 1.0 / 150 // 150ms full fade
-    const DELETE_RATE = 1.0 / 100 // 100ms delete fade
+    const FADE_RATE = 1.0 / 150 
+    const DELETE_RATE = 1.0 / 100 
 
     for (const [id, target] of this.targetOpacityMap) {
       const current = this.opacityMap.get(id) ?? 1.0

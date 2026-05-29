@@ -13,38 +13,34 @@ const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
 
 export function useCanvas() {
-  // Layer Stack Refs
   const bgCanvasRef = useRef<HTMLCanvasElement>(null)
   const committedCanvasRef = useRef<HTMLCanvasElement>(null)
   const activeCanvasRef = useRef<HTMLCanvasElement>(null)
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Logic Refs
   const transformRef = useRef(new TransformSystem())
   const eraserRef = useRef(new EraserSystem())
-  const undoRedoRef = useRef<UndoRedoStack>(new UndoRedoStack([], (strokes) => {
+  const undoRedoRef = useRef<UndoRedoStack>(new UndoRedoStack([], () => {
     updateUndoRedoState()
     renderCommittedLayer()
   }))
   
   const currentPointsRef = useRef<Point[]>([])
+  const inputHandlerRef = useRef<InputHandler | null>(null)
   const renderPendingRef = useRef(false)
   const lastTimeRef = useRef(performance.now())
 
-  // Store access
   const { 
-    activeTool, inputMode, penColor, penWidth, eraserRadius, 
-    background, darkMode, hydrate, setDarkMode 
+    activeTool, inputMode, penColor, penWidth, eraserRadius, pressureEnabled,
+    background, darkMode, hydrate 
   } = useToolStore()
   const { setTransform, setPageHeight, setUndoRedo, pageHeight } = useCanvasStore()
 
-  // 1. Core Rendering Methods
   const renderBackgroundLayer = useCallback(() => {
     const canvas = bgCanvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    
     renderBackground({
       ctx,
       transform: transformRef.current,
@@ -61,14 +57,14 @@ export function useCanvas() {
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    
     redrawCommittedLayer(
       ctx,
       undoRedoRef.current.getStrokes(),
       transformRef.current,
-      (id) => eraserRef.current.getOpacity(id)
+      (id) => eraserRef.current.getOpacity(id),
+      pressureEnabled
     )
-  }, [])
+  }, [pressureEnabled])
 
   const renderActiveLayer = useCallback(() => {
     const canvas = activeCanvasRef.current
@@ -79,15 +75,31 @@ export function useCanvas() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     if (currentPointsRef.current.length < 1) return
 
+    // HIGH FIDELITY: Include predicted points for smoothness
+    const allPointsForRender = [...currentPointsRef.current]
+    const handler = inputHandlerRef.current
+    if (handler && handler.lastPointerEvent && (handler.lastPointerEvent as any).getPredictedEvents) {
+      const rect = canvas.getBoundingClientRect()
+      for (const predicted of (handler.lastPointerEvent as any).getPredictedEvents()) {
+        const w = transformRef.current.screenToWorld(predicted.clientX - rect.left, predicted.clientY - rect.top)
+        allPointsForRender.push({
+          x: Math.min(Math.max(w.x, 0), PAGE_WIDTH_WORLD),
+          y: Math.min(Math.max(w.y, 0), pageHeight),
+          pressure: handler.getPointPressure(predicted)
+        })
+      }
+    }
+
     renderActiveStroke(
       ctx,
-      currentPointsRef.current,
-      penColor,
+      allPointsForRender,
+      penColor, // AUDIT: Correct color from state
       penWidth,
       transformRef.current,
+      pressureEnabled,
       activeTool === 'finger'
     )
-  }, [penColor, penWidth, activeTool])
+  }, [penColor, penWidth, activeTool, pressureEnabled, pageHeight])
 
   const renderCursorLayer = useCallback(() => {
     const canvas = cursorCanvasRef.current
@@ -96,14 +108,14 @@ export function useCanvas() {
     if (!ctx) return
     
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    const { x, y } = eraserRef.current.lastScreenPos
-    if (x < -100 || y < -100) return
+    const { x: sx, y: sy } = eraserRef.current.lastScreenPos
+    if (sx < -100 || sy < -100) return
 
     const zoom = transformRef.current.zoom
     if (activeTool === 'eraser') {
       const radius = eraserRadius * zoom
       ctx.beginPath()
-      ctx.arc(x, y, radius, 0, Math.PI * 2)
+      ctx.arc(sx, sy, radius, 0, Math.PI * 2)
       ctx.fillStyle = darkMode ? '#333333' : '#ffffff'
       ctx.fill()
       ctx.strokeStyle = darkMode ? '#ffffff' : '#333333'
@@ -112,13 +124,12 @@ export function useCanvas() {
     } else {
       const radius = (penWidth * zoom) / 2
       ctx.beginPath()
-      ctx.arc(x, y, Math.max(radius, 2), 0, Math.PI * 2)
-      ctx.fillStyle = penColor + '99' // 60% opacity
+      ctx.arc(sx, sy, Math.max(radius, 2), 0, Math.PI * 2)
+      ctx.fillStyle = penColor + '99'
       ctx.fill()
     }
   }, [activeTool, penWidth, penColor, eraserRadius, darkMode])
 
-  // 2. Lifecycle & Loop
   const renderLoop = useCallback((time: number) => {
     renderPendingRef.current = false
     const dt = time - lastTimeRef.current
@@ -128,15 +139,14 @@ export function useCanvas() {
     const deletedIds = eraserRef.current.getDeletedAndClear()
     
     if (deletedIds.length > 0) {
-      const currentStrokes = undoRedoRef.current.getStrokes()
-      const strokesToRemove = currentStrokes.filter(s => deletedIds.includes(s.id))
+      const strokesToRemove = undoRedoRef.current.getStrokes().filter(s => deletedIds.includes(s.id))
       if (strokesToRemove.length > 0) {
         undoRedoRef.current.push({ type: 'ERASE_STROKES', strokes: strokesToRemove })
       }
     }
 
     if (isEraserAnimating) {
-      renderCommittedLayer()
+       renderCommittedLayer()
     }
 
     renderActiveLayer()
@@ -175,15 +185,12 @@ export function useCanvas() {
       if (ctx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.scale(dpr, dpr)
-        ctx.imageSmoothingEnabled = true
       }
     })
 
-    // Definitive Initialization Logic
     const horizontalPadding = 80
     const fitZoom = (cssWidth - horizontalPadding) / PAGE_WIDTH_WORLD
     transformRef.current.zoom = fitZoom
-    
     const pageScreenWidth = PAGE_WIDTH_WORLD * fitZoom
     const leftMargin = (cssWidth - pageScreenWidth) / 2
     transformRef.current.panX = -leftMargin / fitZoom
@@ -195,7 +202,6 @@ export function useCanvas() {
     scheduleRender()
   }, [setTransform, renderBackgroundLayer, renderCommittedLayer, scheduleRender])
 
-  // 3. Effects
   useEffect(() => {
     hydrate()
   }, [hydrate])
@@ -211,16 +217,17 @@ export function useCanvas() {
     return () => window.removeEventListener('resize', onResize)
   }, [initializeCanvasView])
 
-  // Input Listener
   useEffect(() => {
     const canvas = activeCanvasRef.current
     if (!canvas) return
     
-    const inputHandler = new InputHandler({
+    inputHandlerRef.current = new InputHandler({
       canvas,
       transform: transformRef.current,
       getActiveTool: () => useToolStore.getState().activeTool,
       getInputMode: () => useToolStore.getState().inputMode,
+      isPressureEnabled: () => useToolStore.getState().pressureEnabled,
+      getPageHeight: () => useCanvasStore.getState().pageHeight,
       onStrokeStart: () => {
         currentPointsRef.current = []
         scheduleRender()
@@ -237,18 +244,28 @@ export function useCanvas() {
           const stroke: Stroke = {
             id: crypto.randomUUID(),
             tool: useToolStore.getState().activeTool,
-            color: penColor,
-            width: penWidth,
+            color: useToolStore.getState().penColor, // AUDIT: Correct color captured at creation time
+            width: useToolStore.getState().penWidth,
             points: [...currentPointsRef.current],
             bbox: computeBBox(currentPointsRef.current),
             createdAt: Date.now(),
-            simulatePressure: useToolStore.getState().activeTool === 'finger'
+            simulatePressure: useToolStore.getState().activeTool === 'finger' || !useToolStore.getState().pressureEnabled
           }
           undoRedoRef.current.push({ type: 'ADD_STROKE', stroke })
           
-          // Auto-extend page at halfway mark (A4 height increments)
-          if (stroke.bbox.maxY > pageHeight - 500) {
-            setPageHeight(pageHeight + A4_HEIGHT_WORLD)
+          // PAGE EXTENSION BUG FIXES
+          const trigger = pageHeight - (A4_HEIGHT_WORLD / 2)
+          if (stroke.bbox.maxY > trigger) {
+             const savedX = transformRef.current.panX
+             const savedY = transformRef.current.panY
+             const savedZ = transformRef.current.zoom
+             
+             setPageHeight(pageHeight + A4_HEIGHT_WORLD)
+             
+             // Restore view
+             transformRef.current.panX = savedX
+             transformRef.current.panY = savedY
+             transformRef.current.zoom = savedZ
           }
           renderCommittedLayer()
         }
@@ -259,7 +276,7 @@ export function useCanvas() {
         eraserRef.current.lastScreenPos = { x: screenX, y: screenY }
         const changed = eraserRef.current.checkHits(worldX, worldY, eraserRadius, undoRedoRef.current.getStrokes())
         if (changed) scheduleRender()
-        scheduleRender() // also for cursor
+        scheduleRender()
       },
       onEraserEnd: () => {
         eraserRef.current.commitErase()
@@ -305,23 +322,22 @@ export function useCanvas() {
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerleave', onLeave)
     }
-  }, [penColor, penWidth, eraserRadius, pageHeight, setPageHeight, setTransform, renderBackgroundLayer, renderCommittedLayer, scheduleRender])
+  }, [pageHeight, setPageHeight, setTransform, renderBackgroundLayer, renderCommittedLayer, scheduleRender, eraserRadius])
 
-  // Theme change side-effect: Invert default colors
   useEffect(() => {
-    const currentStrokes = undoRedoRef.current.getStrokes()
-    const inverted = invertStrokes(currentStrokes, darkMode)
-    
-    // We don't push a new undo action for auto-inversion, we just patch the data
-    // so that black stays visible in dark mode.
-    // In a real app, we'd replace the whole list in our UndoRedo internal state.
-    const stack = undoRedoRef.current as any
-    stack.strokes = inverted
-    
+    const inverted = invertStrokes(undoRedoRef.current.getStrokes(), darkMode)
+    ;(undoRedoRef.current as any).strokes = inverted
     renderBackgroundLayer()
     renderCommittedLayer()
     scheduleRender()
   }, [darkMode, renderBackgroundLayer, renderCommittedLayer, scheduleRender])
+
+  // Sync state changes
+  useEffect(() => {
+    renderBackgroundLayer()
+    renderCommittedLayer()
+    scheduleRender()
+  }, [background, pageHeight, pressureEnabled, renderBackgroundLayer, renderCommittedLayer, scheduleRender])
 
   return {
     bgCanvasRef, committedCanvasRef, activeCanvasRef, cursorCanvasRef,

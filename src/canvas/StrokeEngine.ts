@@ -2,6 +2,18 @@ import getStroke from 'perfect-freehand'
 import type { Stroke } from '@/types/stroke'
 import type { TransformSystem } from './TransformSystem'
 
+/** Options for Perfect Freehand based on pressure toggle */
+export function getStrokeOptions(width: number, zoom: number, pressureEnabled: boolean, simulatePressure: boolean) {
+  return {
+    size: width * zoom,
+    thinning: pressureEnabled ? 0.5 : 0,
+    smoothing: 0.5,
+    streamline: 0.5,
+    simulatePressure: simulatePressure,
+    last: true,
+  }
+}
+
 /** Convert perfect-freehand outline points to SVG path string */
 function getSvgPathFromStroke(points: number[][]): string {
   if (points.length < 2) return ''
@@ -15,28 +27,26 @@ function getSvgPathFromStroke(points: number[][]): string {
   return d.join(' ')
 }
 
-/** Render a single committed stroke with opacity support */
+/** Render a single committed stroke */
 export function renderStroke(
   ctx: CanvasRenderingContext2D,
   stroke: Stroke,
   transform: TransformSystem,
-  opacity: number = 1.0
+  opacity: number = 1.0,
+  pressureEnabled: boolean = true
 ): void {
   if (stroke.points.length === 0) return
 
+  const zoom = transform.zoom
   const inputPoints = stroke.points.map((p) => {
     const { x, y } = transform.worldToScreen(p.x, p.y)
     return [x, y, p.pressure]
   })
 
-  const outlinePoints = getStroke(inputPoints, {
-    size: stroke.width * transform.zoom,
-    thinning: 0.5,
-    smoothing: 0.5,
-    streamline: 0.5,
-    simulatePressure: stroke.simulatePressure ?? false,
-    last: true,
-  })
+  const outlinePoints = getStroke(
+    inputPoints, 
+    getStrokeOptions(stroke.width, zoom, pressureEnabled, stroke.simulatePressure ?? false)
+  )
 
   if (outlinePoints.length === 0) return
 
@@ -45,7 +55,7 @@ export function renderStroke(
 
   ctx.save()
   ctx.globalAlpha = opacity
-  ctx.fillStyle = stroke.color
+  ctx.fillStyle = stroke.color // AUDIT: Uses the stored stroke color
   ctx.fill(path)
   ctx.restore()
 }
@@ -57,30 +67,27 @@ export function renderActiveStroke(
   color: string,
   width: number,
   transform: TransformSystem,
+  pressureEnabled: boolean = true,
   simulatePressure: boolean = false
 ): void {
-  if (points.length < 2) return
+  if (points.length < 1) return
 
+  const zoom = transform.zoom
   const inputPoints = points.map((p) => {
     const { x, y } = transform.worldToScreen(p.x, p.y)
     return [x, y, p.pressure]
   })
 
-  const outlinePoints = getStroke(inputPoints, {
-    size: width * transform.zoom,
-    thinning: 0.5,
-    smoothing: 0.5,
-    streamline: 0.5,
-    simulatePressure: simulatePressure,
-    last: false,
-  })
+  // getStroke options for active rendering
+  const options = getStrokeOptions(width, zoom, pressureEnabled, simulatePressure)
+  const outlinePoints = getStroke(inputPoints, { ...options, last: false })
 
   if (outlinePoints.length === 0) return
 
   const pathStr = getSvgPathFromStroke(outlinePoints)
   const path = new Path2D(pathStr)
 
-  ctx.fillStyle = color
+  ctx.fillStyle = color // AUDIT: Uses the current pen color passed from hook
   ctx.fill(path)
 }
 
@@ -89,13 +96,14 @@ export function redrawCommittedLayer(
   ctx: CanvasRenderingContext2D,
   strokes: Stroke[],
   transform: TransformSystem,
-  getOpacity: (id: string) => number
+  getOpacity: (id: string) => number,
+  pressureEnabled: boolean = true
 ): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   for (const stroke of strokes) {
     const opacity = getOpacity(stroke.id)
     if (opacity > 0) {
-      renderStroke(ctx, stroke, transform, opacity)
+      renderStroke(ctx, stroke, transform, opacity, pressureEnabled)
     }
   }
 }

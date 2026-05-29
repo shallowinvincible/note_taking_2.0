@@ -13,7 +13,9 @@ import {
   Check,
   ChevronDown,
   Pointer,
-  PenTool
+  PenTool,
+  Droplets,
+  Minus
 } from 'lucide-react'
 import type { Background } from '@/types/stroke'
 
@@ -31,6 +33,8 @@ export function Toolbar({
     inputMode, setInputMode,
     penColor, setPenColor, 
     penWidth, setPenWidth,
+    eraserRadius, setEraserRadius,
+    pressureEnabled, setPressureEnabled,
     background, setBackground,
     darkMode, setDarkMode 
   } = useToolStore()
@@ -39,6 +43,7 @@ export function Toolbar({
   
   const [showBgMenu, setShowBgMenu] = useState(false)
   const [showColorMenu, setShowColorMenu] = useState(false)
+  const [showEraserMenu, setShowEraserMenu] = useState(false)
 
   const colors = [
     darkMode ? DARK_DEFAULT : LIGHT_DEFAULT,
@@ -50,6 +55,11 @@ export function Toolbar({
     { label: 'Fine', value: 2 },
     { label: 'Medium', value: 4 },
     { label: 'Thick', value: 8 }
+  ]
+
+  const eraserSizes = [
+    { label: 'Small', value: 15 },
+    { label: 'Large', value: 40 }
   ]
 
   const bgOptions: { id: Background; label: string; icon: any }[] = [
@@ -76,19 +86,19 @@ export function Toolbar({
 
       <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-3" />
 
-      {/* Input Mode Toggle (Stylus vs Finger) */}
+      {/* Input Mode Toggle */}
       <div className="flex items-center bg-neutral-100 dark:bg-white/5 rounded-full p-1 gap-1">
         <button
           onClick={() => setInputMode('stylus')}
           className={`p-1.5 rounded-full transition-all ${inputMode === 'stylus' ? 'bg-white dark:bg-white/10 shadow-sm text-blue-500' : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}`}
-          title="Stylus Mode (One finger pan/scroll)"
+          title="Stylus Mode"
         >
           <PenTool size={16} />
         </button>
         <button
           onClick={() => setInputMode('finger')}
           className={`p-1.5 rounded-full transition-all ${inputMode === 'finger' ? 'bg-white dark:bg-white/10 shadow-sm text-blue-500' : 'text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200'}`}
-          title="Finger Mode (One finger draw)"
+          title="Finger Mode"
         >
           <Pointer size={16} />
         </button>
@@ -96,12 +106,22 @@ export function Toolbar({
 
       <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-3" />
 
+      {/* Pressure Toggle */}
+      <button
+        onClick={() => setPressureEnabled(!pressureEnabled)}
+        className={`p-2 rounded-full transition-all ${pressureEnabled ? 'text-blue-500 bg-blue-50 dark:bg-blue-500/10' : 'text-neutral-400 hover:bg-neutral-100 dark:hover:bg-white/5'}`}
+        title={pressureEnabled ? "Pressure ON" : "Pressure OFF"}
+      >
+        {pressureEnabled ? <Droplets size={20} /> : <Minus size={20} />}
+      </button>
+
+      <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-3" />
+
       {/* Background Selector */}
-      <div className="relative group">
+      <div className="relative">
         <button 
-          onClick={() => { setShowBgMenu(!showBgMenu); setShowColorMenu(false); }}
+          onClick={() => { setShowBgMenu(!showBgMenu); setShowColorMenu(false); setShowEraserMenu(false); }}
           className={`p-2 rounded-full hover:bg-neutral-100 dark:hover:bg-white/10 transition-colors flex items-center gap-1 ${showBgMenu ? 'bg-neutral-100 dark:bg-white/10' : ''}`}
-          title="Background Template"
         >
           <Grid size={20} />
           <ChevronDown size={14} className={`transition-transform ${showBgMenu ? 'rotate-180' : ''}`} />
@@ -129,28 +149,49 @@ export function Toolbar({
       <div className="flex items-center gap-1.5">
         <button
           onClick={() => setTool('pen')}
-          className={`p-2.5 rounded-full transition-all border-2 ${activeTool !== 'eraser' ? 'bg-blue-500 text-white border-blue-400 shadow-lg scale-110' : 'hover:bg-neutral-100 dark:hover:bg-white/10 border-transparent'}`}
-          title="Pen tool"
+          className={`p-2.5 rounded-full transition-all border-2 ${activeTool === 'pen' ? 'bg-blue-500 text-white border-blue-400 shadow-lg scale-110' : 'hover:bg-neutral-100 dark:hover:bg-white/10 border-transparent'}`}
+          title="Pen"
         >
           <Pencil size={18} />
         </button>
-        <button
-          onClick={() => setTool('eraser')}
-          className={`p-2.5 rounded-full transition-all border-2 ${activeTool === 'eraser' ? 'bg-blue-500 text-white border-blue-400 shadow-lg scale-110' : 'hover:bg-neutral-100 dark:hover:bg-white/10 border-transparent'}`}
-          title="Eraser tool"
-        >
-          <Eraser size={18} />
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => {
+              if (activeTool === 'eraser') setShowEraserMenu(!showEraserMenu)
+              setTool('eraser')
+              setShowColorMenu(false)
+              setShowBgMenu(false)
+            }}
+            className={`p-2.5 rounded-full transition-all border-2 flex items-center gap-1 ${activeTool === 'eraser' ? 'bg-blue-500 text-white border-blue-400 shadow-lg scale-110' : 'hover:bg-neutral-100 dark:hover:bg-white/10 border-transparent'}`}
+            title="Eraser"
+          >
+            <Eraser size={18} />
+            {activeTool === 'eraser' && <ChevronDown size={14} />}
+          </button>
+          {showEraserMenu && activeTool === 'eraser' && (
+            <div className="absolute top-full mt-4 left-1/2 -translate-x-1/2 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-2 shadow-2xl min-w-[120px] z-[101]">
+              {eraserSizes.map((s) => (
+                <button
+                  key={s.value}
+                  onClick={() => { setEraserRadius(s.value); setShowEraserMenu(false); }}
+                  className={`w-full flex items-center justify-between px-4 py-2 rounded-xl text-xs font-bold transition-colors ${eraserRadius === s.value ? 'bg-blue-500 text-white' : 'hover:bg-neutral-100 dark:hover:bg-white/5 text-neutral-600 dark:text-neutral-400'}`}
+                >
+                  {s.label}
+                  {eraserRadius === s.value && <Check size={14} />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="w-px h-6 bg-black/5 dark:bg-white/10 mx-2" />
 
-      {/* Color Picker & Width selector */}
+      {/* Color Picker / Width */}
       <div className="relative">
         <button 
-          onClick={() => { setShowColorMenu(!showColorMenu); setShowBgMenu(false); }}
+          onClick={() => { setShowColorMenu(!showColorMenu); setShowBgMenu(false); setShowEraserMenu(false); }}
           className={`p-1.5 rounded-full hover:bg-neutral-100 dark:hover:bg-white/10 transition-colors flex items-center gap-1.5 ${showColorMenu ? 'bg-neutral-100 dark:bg-white/10' : ''}`}
-          title="Color & Width"
         >
           <div 
             className="w-7 h-7 rounded-full border-2 border-white dark:border-neutral-800 shadow-inner" 
@@ -174,30 +215,18 @@ export function Toolbar({
             </div>
             
             <div className="space-y-3">
-              <div className="flex justify-between items-center px-1">
-                 <p className="text-[10px] uppercase font-black tracking-wider text-neutral-400">Pen Size</p>
-                 <div className="w-10 h-[1px] bg-neutral-100 dark:bg-white/10" />
-              </div>
+              <p className="text-[10px] uppercase font-black tracking-wider text-neutral-400 px-1">Pen Size</p>
               <div className="flex gap-1">
                 {widths.map((w) => (
                   <button
                     key={w.value}
                     onClick={() => { setPenWidth(w.value); setShowColorMenu(false); }}
-                    className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${penWidth === w.value ? 'bg-blue-500 text-white shadow-md' : 'bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700'}`}
+                    className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all ${penWidth === w.value ? 'bg-blue-500 text-white' : 'bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700'}`}
                   >
                     {w.label}
                   </button>
                 ))}
               </div>
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-neutral-100 dark:border-white/5">
-              <input 
-                type="color" 
-                value={penColor} 
-                onChange={(e) => setPenColor(e.target.value)}
-                className="w-full h-8 rounded-lg cursor-pointer"
-              />
             </div>
           </div>
         )}
@@ -211,7 +240,6 @@ export function Toolbar({
           onClick={onUndo}
           disabled={!canUndo}
           className={`p-2 rounded-full transition-colors disabled:opacity-20 ${canUndo ? 'hover:bg-neutral-100 dark:hover:bg-white/10' : ''}`}
-          title="Undo"
         >
           <Undo2 size={20} />
         </button>
@@ -219,7 +247,6 @@ export function Toolbar({
           onClick={onRedo}
           disabled={!canRedo}
           className={`p-2 rounded-full transition-colors disabled:opacity-20 ${canRedo ? 'hover:bg-neutral-100 dark:hover:bg-white/10' : ''}`}
-          title="Redo"
         >
           <Redo2 size={20} />
         </button>
@@ -231,7 +258,6 @@ export function Toolbar({
       <button
         onClick={() => setDarkMode(!darkMode)}
         className="p-2 rounded-full hover:bg-neutral-100 dark:hover:bg-white/10 transition-colors"
-        title="Toggle Dark Mode"
       >
         {darkMode ? <Sun size={20} /> : <Moon size={20} />}
       </button>
