@@ -8,7 +8,7 @@ export default function Home() {
   const { bgCanvasRef, committedCanvasRef, activeCanvasRef, cursorCanvasRef, undo, redo, fitPage } = useCanvas()
 
   return (
-    <main className="fixed inset-0 overflow-hidden bg-neutral-200 dark:bg-neutral-900 select-none touch-none">
+    <main className="fixed inset-0 overflow-hidden bg-neutral-200 dark:bg-neutral-900 select-none touch-none cursor-none">
       {/* 
         Defining a single relative container for the 4 absolute canvas layers.
         Stacking order:

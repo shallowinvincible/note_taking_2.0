@@ -6,11 +6,13 @@ interface CanvasState {
   panY: number
   pageWidth: number
   pageHeight: number
+  currentPageBottom: number
   canUndo: boolean
   canRedo: boolean
-  
+
   setTransform: (zoom: number, panX: number, panY: number) => void
   setPageHeight: (height: number) => void
+  setCurrentPageBottom: (bottom: number) => void
   setUndoRedo: (undo: boolean, redo: boolean) => void
 }
 
@@ -20,10 +22,12 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   panY: 0,
   pageWidth: 795, // A4 Portrait at 96 DPI is ~794px, user said 795
   pageHeight: 1122,
+  currentPageBottom: 1122,
   canUndo: false,
   canRedo: false,
 
   setTransform: (zoom, panX, panY) => set({ zoom, panX, panY }),
   setPageHeight: (pageHeight) => set({ pageHeight }),
+  setCurrentPageBottom: (currentPageBottom) => set({ currentPageBottom }),
   setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo })
 }))

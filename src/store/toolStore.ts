@@ -13,7 +13,7 @@ interface ToolState {
   pressureEnabled: boolean
   background: Background
   darkMode: boolean
-  
+
   setTool: (tool: StrokeTool) => void
   setInputMode: (mode: 'stylus' | 'finger') => void
   setPenColor: (color: string) => void
@@ -76,9 +76,9 @@ export const useToolStore = create<ToolState>((set, get) => ({
     const pressureEnabled = localStorage.getItem('pressureEnabled')
     const theme = localStorage.getItem('theme')
     const inputMode = localStorage.getItem('inputMode') as 'stylus' | 'finger'
-    
+
     const isDark = theme === 'dark' || (theme === null && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    
+
     set((state) => ({
       penColor: penColor || state.penColor,
       penWidth: penWidth ? Number(penWidth) : state.penWidth,
@@ -87,7 +87,7 @@ export const useToolStore = create<ToolState>((set, get) => ({
       darkMode: isDark,
       inputMode: inputMode || 'stylus'
     }))
-    
+
     if (isDark) {
       document.documentElement.classList.add('dark')
     }

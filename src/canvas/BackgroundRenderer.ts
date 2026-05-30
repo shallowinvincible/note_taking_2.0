@@ -40,23 +40,23 @@ export function renderBackground(opts: RenderBackgroundOptions): void {
   ctx.fillRect(0, 0, canvasW, canvasH)
 
   // 2. Page shadow and background
-  const { x: pageLeft, y: pageTop } = transform.worldToScreen(0, 0)
-  const { x: pageRight, y: pageBottom } = transform.worldToScreen(PAGE_WIDTH, pageHeight)
-  const pageScreenW = pageRight - pageLeft
-  const pageScreenH = pageBottom - pageTop
+  const pageX = Math.round((0 - transform.panX) * transform.zoom)
+  const pageY = Math.round((0 - transform.panY) * transform.zoom)
+  const pageW = Math.round(PAGE_WIDTH * transform.zoom)
+  const pageH = Math.round(pageHeight * transform.zoom)
 
   ctx.save()
-  ctx.shadowColor = darkMode ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.15)'
-  ctx.shadowBlur = 12
+  ctx.shadowColor = darkMode ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.12)'
+  ctx.shadowBlur = 16
   ctx.shadowOffsetY = 2
   ctx.fillStyle = darkMode ? PAGE_DARK : PAGE_LIGHT
-  ctx.fillRect(pageLeft, pageTop, pageScreenW, pageScreenH)
+  ctx.fillRect(pageX, pageY, pageW, pageH)
   ctx.restore()
 
   // 3. Template lines (clipped to page)
   ctx.save()
   ctx.beginPath()
-  ctx.rect(pageLeft, pageTop, pageScreenW, pageScreenH)
+  ctx.rect(pageX, pageY, pageW, pageH)
   ctx.clip()
 
   ctx.strokeStyle = darkMode ? LINE_DARK : LINE_LIGHT
@@ -79,38 +79,31 @@ export function renderBackground(opts: RenderBackgroundOptions): void {
       break
   }
 
-  // 4. Page Separators
+  // 4. Page Separators (Blue lines)
   drawPageSeparators(ctx, transform, pageHeight)
 
   ctx.restore()
 }
 
 function drawPageSeparators(ctx: CanvasRenderingContext2D, transform: TransformSystem, pageHeight: number) {
-  const separatorPositions: number[] = []
-  for (let y = A4_HEIGHT; y < pageHeight; y += A4_HEIGHT) {
-    separatorPositions.push(y)
-  }
+  for (let boundary = A4_HEIGHT; boundary < pageHeight; boundary += A4_HEIGHT) {
+    const { y: screenY } = transform.worldToScreen(0, boundary)
+    
+    // Only draw if the separator is within the visible viewport
+    if (screenY < -10 || screenY > window.innerHeight + 10) continue
 
-  for (const worldY of separatorPositions) {
-    const { y: screenY } = transform.worldToScreen(0, worldY)
     const { x: pageLeft } = transform.worldToScreen(0, 0)
     const { x: pageRight } = transform.worldToScreen(PAGE_WIDTH, 0)
 
     ctx.save()
-    ctx.strokeStyle = '#2563eb' // Tailwind blue-600
-    ctx.lineWidth = 3
+    ctx.strokeStyle = '#2563eb' // Blue-600
+    ctx.lineWidth = 2
     ctx.setLineDash([])
+    ctx.globalAlpha = 1.0
     ctx.beginPath()
     ctx.moveTo(pageLeft, screenY)
     ctx.lineTo(pageRight, screenY)
     ctx.stroke()
-
-    // Page label
-    ctx.fillStyle = '#2563eb'
-    ctx.font = 'bold 11px system-ui, sans-serif'
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'bottom'
-    ctx.fillText(`Page ${separatorPositions.indexOf(worldY) + 2}`, pageLeft + 8, screenY - 4)
     ctx.restore()
   }
 }

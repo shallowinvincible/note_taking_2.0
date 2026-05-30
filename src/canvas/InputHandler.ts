@@ -37,6 +37,9 @@ export class InputHandler {
   private initialZoom: number = 1
   private lastMidX = 0
   private lastMidY = 0
+
+  private lastTouchX = 0
+  private lastTouchY = 0
   
   public lastPointerEvent: PointerEvent | null = null
 
@@ -75,20 +78,22 @@ export class InputHandler {
   /** Determine pressure based on toggle and hardware capability */
   public getPointPressure(e: PointerEvent): number {
     if (!this.config.isPressureEnabled()) return 0.5
-    // Fall back to 0.5 if pressure is explicitly 0 (initial contact)
     return e.pressure > 0 ? e.pressure : 0.5
   }
 
+  private boundListeners: { [key: string]: EventListenerOrEventListenerObject } = {}
+
   private setupPointerEvents() {
-    this.canvas.addEventListener('pointerdown', (e) => {
+    this.boundListeners.pointerdown = ((e: PointerEvent) => {
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
       const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
       
-      // RESTRICTION: Block stroke start outside page
-      if (!this.isInsidePage(world.x, world.y)) return
+      this.lastTouchX = e.clientX
+      this.lastTouchY = e.clientY
 
       if (e.pointerType === 'pen') {
+        if (!this.isInsidePage(world.x, world.y)) return
         this.penIsOnScreen = true
         this.canvas.setPointerCapture(e.pointerId)
         
@@ -113,7 +118,9 @@ export class InputHandler {
           return
         }
 
-        if (this.config.getInputMode() === 'finger') {
+        const inputMode = this.config.getInputMode()
+        if (inputMode === 'finger') {
+          if (!this.isInsidePage(world.x, world.y)) return
           if (this.config.getActiveTool() === 'eraser') {
             this.mode = 'erasing'
           } else {
@@ -122,10 +129,14 @@ export class InputHandler {
             this.config.onStrokeStart(e, true)
           }
           this.canvas.setPointerCapture(e.pointerId)
+        } else {
+          this.mode = 'scrolling'
+          this.canvas.setPointerCapture(e.pointerId)
         }
       }
 
       if (e.pointerType === 'mouse') {
+        if (!this.isInsidePage(world.x, world.y)) return
         this.canvas.setPointerCapture(e.pointerId)
         if (this.config.getActiveTool() === 'eraser') {
           this.mode = 'erasing'
@@ -136,21 +147,23 @@ export class InputHandler {
           this.config.onStrokeStart(e, false)
         }
       }
-    })
+    }) as EventListener
 
-    this.canvas.addEventListener('pointermove', (e) => {
+    this.boundListeners.pointermove = ((e: PointerEvent) => {
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
       const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
 
-      // Update cursor style
-      if (!this.isInsidePage(world.x, world.y)) {
-        this.canvas.style.cursor = 'not-allowed'
-      } else {
-        this.canvas.style.cursor = 'none'
-      }
-
       if (this.mode === 'idle') return
+
+      if (this.mode === 'scrolling' && e.pointerType === 'touch') {
+        const dx = e.clientX - this.lastTouchX
+        const dy = e.clientY - this.lastTouchY
+        this.config.onPan(dx * 0.6, dy * 0.6)
+        this.lastTouchX = e.clientX
+        this.lastTouchY = e.clientY
+        return
+      }
 
       if (this.mode === 'erasing') {
         if (e.pointerType === 'touch' && this.penIsOnScreen) return
@@ -169,47 +182,45 @@ export class InputHandler {
           const clamped = this.clampToPage(w.x, w.y)
           
           if (this.shouldAddPoint(clamped.x, clamped.y)) {
-            const p = {
-              x: clamped.x,
-              y: clamped.y,
-              pressure: this.getPointPressure(ev)
-            }
+            const p = { x: clamped.x, y: clamped.y, pressure: this.getPointPressure(ev) }
             points.push(p)
             this.lastAddedPoint = p
           }
         }
         if (points.length > 0) this.config.onStrokeMove(points)
       }
-    })
+    }) as EventListener
 
-    const handleUp = (e: PointerEvent) => {
+    this.boundListeners.pointerup = ((e: PointerEvent) => {
       if (e.pointerType === 'pen') {
         this.penIsOnScreen = false
         if (this.mode === 'drawing-pen' || this.mode === 'erasing') this.finishInput()
         return
       }
-
       if (e.pointerType === 'touch') {
         this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
-        if (this.mode === 'drawing-finger' || (this.mode === 'erasing' && this.activeTouchCount === 0)) {
+        if (this.mode === 'drawing-finger' || this.mode === 'erasing' || this.mode === 'scrolling') {
           this.finishInput()
         }
         if (this.activeTouchCount === 0) this.mode = 'idle'
       }
-
       if (e.pointerType === 'mouse') this.finishInput()
-    }
+    }) as EventListener
 
-    this.canvas.addEventListener('pointerup', handleUp)
-    this.canvas.addEventListener('pointercancel', (e) => {
+    this.boundListeners.pointercancel = ((e: PointerEvent) => {
       if (e.pointerType === 'pen') this.penIsOnScreen = false
       if (e.pointerType === 'touch') this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
       this.finishInput()
-    })
+    }) as EventListener
+
+    this.canvas.addEventListener('pointerdown', this.boundListeners.pointerdown)
+    this.canvas.addEventListener('pointermove', this.boundListeners.pointermove)
+    this.canvas.addEventListener('pointerup', this.boundListeners.pointerup)
+    this.canvas.addEventListener('pointercancel', this.boundListeners.pointercancel)
   }
 
   private setupTouchEvents() {
-    this.canvas.addEventListener('touchstart', (e) => {
+    this.boundListeners.touchstart = ((e: TouchEvent) => {
       if (e.touches.length === 2 && !this.penIsOnScreen) {
         this.initialPinchDist = this.getPinchDistance(e.touches)
         this.initialZoom = this.transform.zoom
@@ -218,15 +229,13 @@ export class InputHandler {
         this.lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
         e.preventDefault()
       }
-    }, { passive: false })
+    }) as EventListener
 
-    this.canvas.addEventListener('touchmove', (e) => {
+    this.boundListeners.touchmove = ((e: TouchEvent) => {
       if (this.penIsOnScreen) return
-
       if (e.touches.length === 2 && this.initialPinchDist !== null) {
         const currentDist = this.getPinchDistance(e.touches)
         const rawScale = currentDist / this.initialPinchDist
-        // DAMPING: Limit zoom change per frame to 10%
         const clampedScale = Math.min(Math.max(rawScale, 0.9), 1.1)
         const newZoom = this.initialZoom * clampedScale
         
@@ -236,7 +245,6 @@ export class InputHandler {
         
         this.config.onZoom(newZoom, midX, midY)
         
-        // DAMPING: Apply 0.7 dampening to pan
         const panDamping = 0.7
         this.config.onPan((midX - this.lastMidX) * panDamping, (midY - this.lastMidY) * panDamping)
         
@@ -244,25 +252,39 @@ export class InputHandler {
         this.lastMidY = midY
         e.preventDefault()
       }
-    }, { passive: false })
+    }) as EventListener
 
-    this.canvas.addEventListener('touchend', (e) => {
+    this.boundListeners.touchend = ((e: TouchEvent) => {
       if (e.touches.length < 2) this.initialPinchDist = null
-    })
+    }) as EventListener
 
-    this.canvas.addEventListener('wheel', (e) => {
+    this.boundListeners.wheel = ((e: WheelEvent) => {
       e.preventDefault()
       if (e.ctrlKey || e.metaKey) {
-        // DAMPING: Reduce zoom sensitivity (0.95/1.05)
         const zoomFactor = e.deltaY > 0 ? 0.95 : 1.05
         const rect = this.canvas.getBoundingClientRect()
         this.config.onZoom(this.transform.zoom * zoomFactor, e.clientX - rect.left, e.clientY - rect.top)
       } else {
-        // DAMPING: Reduce scroll sensitivity by 40% (0.6 multiplier)
         const scrollDampening = 0.6
         this.config.onScroll(e.deltaY * scrollDampening)
       }
-    }, { passive: false })
+    }) as EventListener
+    
+    this.canvas.addEventListener('touchstart', this.boundListeners.touchstart, { passive: false })
+    this.canvas.addEventListener('touchmove', this.boundListeners.touchmove, { passive: false })
+    this.canvas.addEventListener('touchend', this.boundListeners.touchend)
+    this.canvas.addEventListener('wheel', this.boundListeners.wheel, { passive: false })
+  }
+
+  public destroy() {
+    this.canvas.removeEventListener('pointerdown', this.boundListeners.pointerdown)
+    this.canvas.removeEventListener('pointermove', this.boundListeners.pointermove)
+    this.canvas.removeEventListener('pointerup', this.boundListeners.pointerup)
+    this.canvas.removeEventListener('pointercancel', this.boundListeners.pointercancel)
+    this.canvas.removeEventListener('touchstart', this.boundListeners.touchstart)
+    this.canvas.removeEventListener('touchmove', this.boundListeners.touchmove)
+    this.canvas.removeEventListener('touchend', this.boundListeners.touchend)
+    this.canvas.removeEventListener('wheel', this.boundListeners.wheel)
   }
 
   private getPinchDistance(touches: TouchList): number {
