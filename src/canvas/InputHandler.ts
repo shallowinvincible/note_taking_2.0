@@ -95,12 +95,16 @@ export class InputHandler {
     return e.pressure > 0 ? e.pressure : 0.5
   }
 
+  private lastPencilUpTime = 0
   private boundListeners: { [key: string]: EventListenerOrEventListenerObject } = {}
 
   private setupPointerEvents() {
     this.boundListeners.pointerdown = ((e: PointerEvent) => {
+      const now = e.timeStamp;
+      const timeSinceLastUp = now - this.lastPencilUpTime;
+
       if (DEBUG_PENCIL && e.pointerType === 'pen') {
-        console.log(`[PENCIL] pointerdown | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)} | type: ${e.pointerType}`);
+        console.log(`[PENCIL] pointerdown | id: ${e.pointerId} | time: ${now.toFixed(2)} | interval: ${timeSinceLastUp.toFixed(2)}ms | mode: ${this.mode} | penOnScreen: ${this.penIsOnScreen}`);
       }
       
       const startTime = perf.startMeasure('pointerdown');
@@ -112,11 +116,20 @@ export class InputHandler {
       this.lastTouchY = e.clientY
 
       if (e.pointerType === 'pen') {
+        // RESET penIsOnScreen if it was stuck (unlikely, but safe)
+        this.penIsOnScreen = true
+        
         if (!this.isInsidePage(world.x, world.y)) {
            if (DEBUG_PENCIL) console.warn('[PENCIL] rejected - outside page');
            return
         }
-        this.penIsOnScreen = true
+
+        // FORCE finish any previous input if we are not idle
+        if (this.mode !== 'idle') {
+          if (DEBUG_PENCIL) console.warn(`[PENCIL] Re-entry! Finishing previous mode: ${this.mode}`);
+          this.finishInput();
+        }
+
         this.canvas.setPointerCapture(e.pointerId)
         
         if (this.config.getActiveTool() === 'eraser') {
@@ -245,6 +258,10 @@ export class InputHandler {
           this.canvas.releasePointerCapture(e.pointerId)
         }
       } catch (err) {}
+
+      if (e.pointerType === 'pen') {
+        this.lastPencilUpTime = e.timeStamp;
+      }
 
       if (DEBUG_PENCIL && e.pointerType === 'pen') {
         console.log(`[PENCIL] pointerup | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)} | mode: ${this.mode}`);

@@ -8,9 +8,9 @@ export class UndoRedoStack {
   private undoStack: Action[] = []
   private redoStack: Action[] = []
   private strokes: Stroke[] = []
-  private onChange: (strokes: Stroke[]) => void
+  private onChange: (strokes: Stroke[], action?: Action) => void
 
-  constructor(initialStrokes: Stroke[], onChange: (strokes: Stroke[]) => void) {
+  constructor(initialStrokes: Stroke[], onChange: (strokes: Stroke[], action?: Action) => void) {
     this.strokes = [...initialStrokes]
     this.onChange = onChange
   }
@@ -19,7 +19,7 @@ export class UndoRedoStack {
     this.applyAction(action)
     this.undoStack.push(action)
     this.redoStack = []
-    this.onChange(this.strokes)
+    this.onChange(this.strokes, action)
   }
 
   undo() {
@@ -28,7 +28,7 @@ export class UndoRedoStack {
     
     this.revertAction(action)
     this.redoStack.push(action)
-    this.onChange(this.strokes)
+    this.onChange(this.strokes) // No action passed means full redraw
   }
 
   redo() {
@@ -37,7 +37,7 @@ export class UndoRedoStack {
     
     this.applyAction(action)
     this.undoStack.push(action)
-    this.onChange(this.strokes)
+    this.onChange(this.strokes) // No action passed means full redraw
   }
 
   private applyAction(action: Action) {
@@ -53,8 +53,6 @@ export class UndoRedoStack {
     if (action.type === 'ADD_STROKE') {
       this.strokes.pop()
     } else if (action.type === 'ERASE_STROKES') {
-      // Re-insert erased strokes. For simplicity, we just append them.
-      // Ideally we'd keep their z-index/order.
       this.strokes = [...this.strokes, ...action.strokes].sort((a,b) => a.createdAt - b.createdAt)
     }
   }

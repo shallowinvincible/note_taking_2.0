@@ -212,9 +212,15 @@ export function useCanvas() {
     setUndoRedo(undoRedoRef.current.canUndo(), undoRedoRef.current.canRedo())
   }, [setUndoRedo])
 
-  const undoRedoRef = useRef<UndoRedoStack>(new UndoRedoStack([], () => {
+  const undoRedoRef = useRef<UndoRedoStack>(new UndoRedoStack([], (strokes, action) => {
     updateUndoRedoState()
-    fullRedrawCachedLayer()
+    
+    // REQUIREMENT 3/4: High-Performance incremental path.
+    // If we just added a stroke, the incremental render already happened.
+    // We only need a full rebuild for undo/redo or batched erasers.
+    if (!action || action.type !== 'ADD_STROKE') {
+      fullRedrawCachedLayer()
+    }
   }))
 
   // --- Lifecycle & Initialization ---
@@ -519,8 +525,12 @@ export function useCanvas() {
 
   return {
     bgCanvasRef, committedCanvasRef, activeCanvasRef, cursorCanvasRef,
-    undo: () => { undoRedoRef.current.undo(); },
-    redo: () => { undoRedoRef.current.redo(); },
+    undo: () => { 
+      undoRedoRef.current.undo(); 
+    },
+    redo: () => { 
+      undoRedoRef.current.redo(); 
+    },
     fitPage: initializeCanvasView
   }
 }
