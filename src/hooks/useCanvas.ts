@@ -380,18 +380,55 @@ export function useCanvas() {
     }
   }, [initializeCanvasView])
 
+  // --- Input Handling Lifecycle (Requirement 1 - Stable Input) ---
+  
+  // 1. Creation/Destruction (Only when canvas changes)
   useEffect(() => {
     const canvas = activeCanvasRef.current
     if (!canvas) return
     
-    inputHandlerRef.current = new InputHandler({
+    // Create a dummy config initially
+    const config: InputHandlerConfig = {
       canvas,
       transform: transformRef.current,
       getActiveTool: () => useToolStore.getState().activeTool,
       getInputMode: () => useToolStore.getState().inputMode,
       isPressureEnabled: () => useToolStore.getState().pressureEnabled,
       getPageHeight: () => useCanvasStore.getState().pageHeight,
-      onStrokeStart: () => {
+      onStrokeStart: () => {},
+      onStrokeMove: () => {},
+      onStrokeEnd: () => {},
+      onEraserMove: () => {},
+      onEraserStart: () => {},
+      onEraserEnd: () => {},
+      onScroll: () => {},
+      onZoom: () => {},
+      onPan: () => {},
+      onRenderRequest: () => {}
+    }
+    
+    inputHandlerRef.current = new InputHandler(config)
+
+    return () => {
+      if (inputHandlerRef.current) {
+        inputHandlerRef.current.destroy()
+        inputHandlerRef.current = null
+      }
+    }
+  }, []) // Empty dependency array means it only runs on mount/unmount
+
+  // 2. Dynamic Configuration Updates
+  useEffect(() => {
+    if (!inputHandlerRef.current) return
+
+    inputHandlerRef.current.updateConfig({
+      canvas: activeCanvasRef.current!,
+      transform: transformRef.current,
+      getActiveTool: () => useToolStore.getState().activeTool,
+      getInputMode: () => useToolStore.getState().inputMode,
+      isPressureEnabled: () => useToolStore.getState().pressureEnabled,
+      getPageHeight: () => useCanvasStore.getState().pageHeight,
+      onStrokeStart: (e, simulatePressure) => {
         currentPointsRef.current = []
         scheduleRender()
       },
@@ -413,28 +450,18 @@ export function useCanvas() {
             simulatePressure: useToolStore.getState().activeTool === 'finger' || !useToolStore.getState().pressureEnabled
           }
 
-          // ASYNCHRONOUS COMMIT (Requirement 1)
-          // We move the heavy lifting out of the immediate pointer event handler.
           queueMicrotask(() => {
             const commitStartTime = perf.startMeasure('commitStroke-Async');
-            
             undoRedoRef.current.push({ type: 'ADD_STROKE', stroke })
-            
-            // Accumulate directly to relevant page buffers
             pageManagerRef.current.renderStrokeToPages(stroke, pressureEnabled);
-
-            // Draw once to visible layer for instant feedback
             const committedCtx = committedCanvasRef.current?.getContext('2d');
             if (committedCtx) {
               renderStroke(committedCtx, stroke, transformRef.current, 1.0, pressureEnabled);
             }
-            
-            // Relative threshold extension
             const triggerY = currentPageBottom - 561
             if (stroke.bbox.maxY > triggerY) {
               extendPage()
             }
-
             perf.endMeasure(commitStartTime, 'commitStroke-Async');
           });
         }
@@ -478,13 +505,6 @@ export function useCanvas() {
       },
       onRenderRequest: scheduleRender
     })
-
-    return () => {
-      if (inputHandlerRef.current) {
-        inputHandlerRef.current.destroy()
-        inputHandlerRef.current = null
-      }
-    }
   }, [pageHeight, currentPageBottom, extendPage, renderBackgroundLayer, redrawCachedLayerFromBuffer, renderWithErasePreview, setTransform, pressureEnabled, eraserRadius, darkMode, scheduleRender])
 
   useEffect(() => {

@@ -26,6 +26,8 @@ export interface InputHandlerConfig {
 const PAGE_WIDTH_WORLD = 795
 const MIN_POINT_DISTANCE = 1.5 // world units
 
+const DEBUG_PENCIL = true;
+
 export class InputHandler {
   private canvas: HTMLCanvasElement
   private transform: TransformSystem
@@ -56,6 +58,12 @@ export class InputHandler {
 
     this.setupPointerEvents()
     this.setupTouchEvents()
+  }
+
+  // Add a method to update the config without destroying the handler
+  public updateConfig(newConfig: InputHandlerConfig) {
+    this.config = newConfig;
+    this.transform = newConfig.transform;
   }
 
   /** Check if a world point is inside the page boundary */
@@ -91,6 +99,10 @@ export class InputHandler {
 
   private setupPointerEvents() {
     this.boundListeners.pointerdown = ((e: PointerEvent) => {
+      if (DEBUG_PENCIL && e.pointerType === 'pen') {
+        console.log(`[PENCIL] pointerdown | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)} | type: ${e.pointerType}`);
+      }
+      
       const startTime = perf.startMeasure('pointerdown');
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
@@ -100,7 +112,10 @@ export class InputHandler {
       this.lastTouchY = e.clientY
 
       if (e.pointerType === 'pen') {
-        if (!this.isInsidePage(world.x, world.y)) return
+        if (!this.isInsidePage(world.x, world.y)) {
+           if (DEBUG_PENCIL) console.warn('[PENCIL] rejected - outside page');
+           return
+        }
         this.penIsOnScreen = true
         this.canvas.setPointerCapture(e.pointerId)
         
@@ -168,6 +183,13 @@ export class InputHandler {
     }) as EventListener
 
     this.boundListeners.pointermove = ((e: PointerEvent) => {
+      if (DEBUG_PENCIL && e.pointerType === 'pen' && (this.mode !== 'idle')) {
+         // Throttling move logs slightly to avoid console spam, but logging enough to trace.
+         if (Math.round(e.timeStamp) % 10 === 0) {
+           console.log(`[PENCIL] pointermove | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)}`);
+         }
+      }
+
       const startTime = perf.startMeasure('pointermove');
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
@@ -216,14 +238,19 @@ export class InputHandler {
     }) as EventListener
 
     this.boundListeners.pointerup = ((e: PointerEvent) => {
-      const startTime = perf.startMeasure('pointerup');
-      
       // IMMEDIATE: Release pointer capture so the OS knows we are done.
+      // This is moved to the VERY top to avoid blocking subsequent contact.
       try {
         if (this.canvas.hasPointerCapture(e.pointerId)) {
           this.canvas.releasePointerCapture(e.pointerId)
         }
       } catch (err) {}
+
+      if (DEBUG_PENCIL && e.pointerType === 'pen') {
+        console.log(`[PENCIL] pointerup | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)} | mode: ${this.mode}`);
+      }
+
+      const startTime = perf.startMeasure('pointerup');
 
       if (e.pointerType === 'pen') {
         this.penIsOnScreen = false
@@ -247,16 +274,24 @@ export class InputHandler {
     }) as EventListener
 
     this.boundListeners.pointercancel = ((e: PointerEvent) => {
-      const startTime = perf.startMeasure('pointercancel');
-      if (e.pointerType === 'pen') this.penIsOnScreen = false
-      if (e.pointerType === 'touch') this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
-      this.finishInput()
-      
+      // IMMEDIATE: Release capture
       try {
         if (this.canvas.hasPointerCapture(e.pointerId)) {
           this.canvas.releasePointerCapture(e.pointerId)
         }
       } catch (err) {}
+
+      if (DEBUG_PENCIL && e.pointerType === 'pen') {
+        console.log(`[PENCIL] pointercancel | id: ${e.pointerId} | time: ${e.timeStamp.toFixed(2)} | mode: ${this.mode}`);
+      }
+
+      const startTime = perf.startMeasure('pointercancel');
+      if (e.pointerType === 'pen') this.penIsOnScreen = false
+      if (e.pointerType === 'touch') this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
+      
+      // Critical: Ensure pointercancel finalizes the stroke just like pointerup.
+      this.finishInput()
+      
       perf.endMeasure(startTime, 'pointercancel');
     }) as EventListener
 
