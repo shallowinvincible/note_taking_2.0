@@ -67,14 +67,18 @@ export function renderStroke(
 export function renderStrokeToWorld(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   stroke: Stroke,
-  pressureEnabled: boolean = true
+  pressureEnabled: boolean = true,
+  scale: number = 1.0
 ): void {
   ctx.imageSmoothingEnabled = false
-  const inputPoints = stroke.points.map(p => [p.x, p.y, p.pressure])
+  
+  // Apply scale to world coordinates
+  const inputPoints = stroke.points.map(p => [p.x * scale, p.y * scale, p.pressure])
+  
   const outlinePoints = getStroke(
     inputPoints,
     {
-      size: stroke.width,
+      size: stroke.width * scale,
       thinning: pressureEnabled ? 0.5 : 0,
       smoothing: 0.6,
       streamline: 0.5,

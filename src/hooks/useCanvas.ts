@@ -11,6 +11,7 @@ import { computeBBox, type Point, type Stroke } from '@/types/stroke'
 
 const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
+const BUFFER_SCALE = 3.0 // 3x resolution for infinite-quality print/zoom
 
 export function useCanvas() {
   const bgCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -42,7 +43,7 @@ export function useCanvas() {
   // --- Rendering Architecture (O(1) Zoom/Pan) ---
 
   const initOffscreenCanvas = useCallback((width: number, height: number) => {
-    const canvas = new OffscreenCanvas(width, height)
+    const canvas = new OffscreenCanvas(width * BUFFER_SCALE, height * BUFFER_SCALE)
     const ctx = canvas.getContext('2d')
     if (ctx) {
       ctx.imageSmoothingEnabled = false
@@ -75,7 +76,7 @@ export function useCanvas() {
     const bufferHeight = offscreenRef.current.height
     
     const destW = PAGE_WIDTH_WORLD * zoom
-    const destH = bufferHeight * zoom
+    const destH = (bufferHeight / BUFFER_SCALE) * zoom
     
     const roundedX = Math.round(destX)
     const roundedY = Math.round(destY)
@@ -86,7 +87,7 @@ export function useCanvas() {
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(
       offscreenRef.current,
-      0, 0, PAGE_WIDTH_WORLD, bufferHeight,     // Source
+      0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, bufferHeight,     // Source (Width already scaled, height is raw buffer height)
       roundedX, roundedY, roundedW, roundedH  // Dest
     )
   }, [])
@@ -94,12 +95,12 @@ export function useCanvas() {
   const rebuildOffscreenCanvas = useCallback(() => {
     if (!offscreenCtxRef.current || !offscreenRef.current) return
     const bufferHeight = offscreenRef.current.height
-    offscreenCtxRef.current.clearRect(0, 0, PAGE_WIDTH_WORLD, bufferHeight)
+    offscreenCtxRef.current.clearRect(0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, bufferHeight)
     
     const strokes = undoRedoRef.current.getStrokes()
     for (const stroke of strokes) {
       if (eraserRef.current.pendingErase.has(stroke.id)) continue
-      renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled)
+      renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled, BUFFER_SCALE)
     }
   }, [pressureEnabled])
 
@@ -229,14 +230,18 @@ export function useCanvas() {
     setPageHeight(newHeight)
     setCurrentPageBottom(currentPageBottom + A4_HEIGHT_WORLD)
 
-    // Grow offscreen canvas (1:1 Copy)
-    const newBuffer = new OffscreenCanvas(PAGE_WIDTH_WORLD, newHeight)
+    // Grow offscreen canvas (Scaled Copy)
+    const newBuffer = new OffscreenCanvas(PAGE_WIDTH_WORLD * BUFFER_SCALE, newHeight * BUFFER_SCALE)
     const newCtx = newBuffer.getContext('2d')
     if (newCtx && offscreenRef.current) {
       newCtx.imageSmoothingEnabled = false
       // Copy ALL existing stroke pixels from old canvas into new one
       if (oldHeight > 0) {
-        newCtx.drawImage(offscreenRef.current, 0, 0, PAGE_WIDTH_WORLD, oldHeight, 0, 0, PAGE_WIDTH_WORLD, oldHeight)
+        newCtx.drawImage(
+          offscreenRef.current, 
+          0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, oldHeight * BUFFER_SCALE, 
+          0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, oldHeight * BUFFER_SCALE
+        )
       }
       offscreenRef.current = newBuffer
       offscreenCtxRef.current = newCtx
@@ -439,12 +444,15 @@ export function useCanvas() {
           
           // Accumulate directly to offscreen and visible cache (Zero lag)
           if (offscreenCtxRef.current) {
-            renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled)
+            renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled, BUFFER_SCALE)
           }
           const committedCtx = committedCanvasRef.current?.getContext('2d')
           if (committedCtx) {
             renderStroke(committedCtx, stroke, transformRef.current, 1.0, pressureEnabled)
           }
+
+          // Full redraw once to ensure buffer and screen are pixel-perfect sync
+          redrawCachedLayerFromBuffer()
 
           // Relative threshold extension
           const triggerY = currentPageBottom - 561
@@ -460,6 +468,9 @@ export function useCanvas() {
         const changed = eraserRef.current.checkHits(worldX, worldY, eraserRadius, undoRedoRef.current.getStrokes())
         if (changed) renderWithErasePreview()
         scheduleRender()
+      },
+      onEraserStart: () => {
+        eraserRef.current.resetLastPos()
       },
       onEraserEnd: () => {
         eraserRef.current.commitErase()

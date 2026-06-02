@@ -18,28 +18,55 @@ export class EraserSystem {
    */
   checkHits(worldX: number, worldY: number, radius: number, strokes: Stroke[]): boolean {
     let changed = false
-    const hitRadius = radius // eraserRadius is in world units
     
-    for (const stroke of strokes) {
-      if (this.deletedIds.has(stroke.id)) continue
-
-      const isHit = this.eraserHitsStroke(worldX, worldY, hitRadius, stroke)
-
-      if (isHit) {
-        if (!this.pendingErase.has(stroke.id)) {
-          this.pendingErase.add(stroke.id)
-          this.targetOpacityMap.set(stroke.id, 0.3)
-          changed = true
+    // Determine points to check (interpolate if we have a last position)
+    const pointsToCheck: { x: number; y: number }[] = []
+    if (this.lastWorldPos) {
+      const dx = worldX - this.lastWorldPos.x
+      const dy = worldY - this.lastWorldPos.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      
+      // Interpolate if distance is significant relative to radius
+      const step = radius / 2
+      if (dist > step) {
+        const steps = Math.ceil(dist / step)
+        for (let i = 1; i <= steps; i++) {
+          pointsToCheck.push({
+            x: this.lastWorldPos.x + (dx * i) / steps,
+            y: this.lastWorldPos.y + (dy * i) / steps
+          })
         }
       } else {
-        if (this.pendingErase.has(stroke.id)) {
-          this.pendingErase.delete(stroke.id)
-          this.targetOpacityMap.set(stroke.id, 1.0)
+        pointsToCheck.push({ x: worldX, y: worldY })
+      }
+    } else {
+      pointsToCheck.push({ x: worldX, y: worldY })
+    }
+    
+    this.lastWorldPos = { x: worldX, y: worldY }
+
+    for (const point of pointsToCheck) {
+      for (const stroke of strokes) {
+        if (this.deletedIds.has(stroke.id)) continue
+        if (this.pendingErase.has(stroke.id)) continue // Already marked
+
+        const isHit = this.eraserHitsStroke(point.x, point.y, radius, stroke)
+
+        if (isHit) {
+          this.pendingErase.add(stroke.id)
+          this.targetOpacityMap.set(stroke.id, 0.2) // Slightly darker than before to indicate "marked"
           changed = true
         }
       }
     }
+    
     return changed
+  }
+
+  private lastWorldPos: { x: number; y: number } | null = null
+
+  resetLastPos() {
+    this.lastWorldPos = null
   }
 
   private eraserOverlapsBoundingBox(ex: number, ey: number, er: number, bbox: BBox): boolean {

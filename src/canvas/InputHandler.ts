@@ -10,6 +10,7 @@ export interface InputHandlerConfig {
   onStrokeMove: (points: Point[]) => void
   onStrokeEnd: () => void
   onEraserMove: (worldX: number, worldY: number, screenX: number, screenY: number) => void
+  onEraserStart: () => void
   onEraserEnd: () => void
   onScroll: (dsy: number) => void
   onZoom: (newZoom: number, midX: number, midY: number) => void
@@ -47,6 +48,10 @@ export class InputHandler {
     this.canvas = config.canvas
     this.transform = config.transform
     this.config = config
+
+    // Lock touch actions at the element level to prevent iPad OS gestures (multi-tasking, etc.) 
+    // from stealing events at the start of a stroke.
+    this.canvas.style.touchAction = 'none'
 
     this.setupPointerEvents()
     this.setupTouchEvents()
@@ -99,6 +104,7 @@ export class InputHandler {
         
         if (this.config.getActiveTool() === 'eraser') {
           this.mode = 'erasing'
+          this.config.onEraserStart()
           this.handleEraserMove(e)
         } else {
           this.mode = 'drawing-pen'
@@ -123,6 +129,7 @@ export class InputHandler {
           if (!this.isInsidePage(world.x, world.y)) return
           if (this.config.getActiveTool() === 'eraser') {
             this.mode = 'erasing'
+            this.config.onEraserStart()
           } else {
             this.mode = 'drawing-finger'
             this.lastAddedPoint = null
@@ -140,6 +147,7 @@ export class InputHandler {
         this.canvas.setPointerCapture(e.pointerId)
         if (this.config.getActiveTool() === 'eraser') {
           this.mode = 'erasing'
+          this.config.onEraserStart()
           this.handleEraserMove(e)
         } else {
           this.mode = 'drawing-pen'
@@ -205,12 +213,26 @@ export class InputHandler {
         if (this.activeTouchCount === 0) this.mode = 'idle'
       }
       if (e.pointerType === 'mouse') this.finishInput()
+
+      try {
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+          this.canvas.releasePointerCapture(e.pointerId)
+        }
+      } catch (err) {
+        // Capture might have been lost already
+      }
     }) as EventListener
 
     this.boundListeners.pointercancel = ((e: PointerEvent) => {
       if (e.pointerType === 'pen') this.penIsOnScreen = false
       if (e.pointerType === 'touch') this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
       this.finishInput()
+      
+      try {
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+          this.canvas.releasePointerCapture(e.pointerId)
+        }
+      } catch (err) {}
     }) as EventListener
 
     this.canvas.addEventListener('pointerdown', this.boundListeners.pointerdown)
