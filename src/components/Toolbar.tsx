@@ -71,7 +71,7 @@ export function Toolbar({
   ]
 
   return (
-    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center bg-white/90 dark:bg-black/80 backdrop-blur-md border border-white/20 dark:border-white/10 px-4 py-2 rounded-full shadow-2xl transition-all pointer-events-auto select-none">
+    <div id="main-toolbar" className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center bg-white/90 dark:bg-black/80 backdrop-blur-md border border-white/20 dark:border-white/10 px-4 py-2 rounded-full shadow-2xl transition-all pointer-events-auto select-none">
       
       {/* Zoom Indicator */}
       <div className="flex items-center">
