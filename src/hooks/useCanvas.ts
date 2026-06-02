@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { TransformSystem } from '@/canvas/TransformSystem'
-import { InputHandler } from '@/canvas/InputHandler'
+import { InputHandler, type InputHandlerConfig } from '@/canvas/InputHandler'
 import { UndoRedoStack } from '@/canvas/UndoRedo'
 import { renderActiveStroke, renderStroke } from '@/canvas/StrokeEngine'
 import { renderBackground } from '@/canvas/BackgroundRenderer'
@@ -80,7 +80,7 @@ export function useCanvas() {
     ctx.restore();
     
     perf.recordFrame(perf.endMeasure(startTime, 'redrawCachedLayer'));
-  }, [])
+  }, [pressureEnabled])
 
   const rebuildOffscreenCanvas = useCallback(() => {
     const startTime = perf.startMeasure('rebuildOffscreenCanvas');
@@ -200,7 +200,7 @@ export function useCanvas() {
       renderPendingRef.current = true
       requestAnimationFrame(renderLoop)
     }
-  }, [renderActiveLayer, renderWithErasePreview, activeTool, penColor, penWidth, eraserRadius, darkMode])
+  }, [renderActiveLayer, renderWithErasePreview])
 
   const scheduleRender = useCallback(() => {
     if (renderPendingRef.current) return
@@ -266,7 +266,7 @@ export function useCanvas() {
     fullRedrawCachedLayer()
     renderBackgroundLayer()
     scheduleRender()
-  }, [pageHeight, fullRedrawCachedLayer, renderBackgroundLayer, setTransform, scheduleRender])
+  }, [fullRedrawCachedLayer, renderBackgroundLayer, setTransform, scheduleRender])
 
   useEffect(() => {
     hydrate()
