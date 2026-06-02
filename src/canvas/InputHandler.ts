@@ -1,5 +1,6 @@
 import type { Point, StrokeTool } from '@/types/stroke'
 import type { TransformSystem } from './TransformSystem'
+import { perf } from './PerformanceMonitor'
 
 export type InputMode = 'idle' | 'drawing-pen' | 'drawing-finger' | 'erasing' | 'scrolling' | 'zooming'
 
@@ -90,6 +91,7 @@ export class InputHandler {
 
   private setupPointerEvents() {
     this.boundListeners.pointerdown = ((e: PointerEvent) => {
+      const startTime = perf.startMeasure('pointerdown');
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
       const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
@@ -111,16 +113,21 @@ export class InputHandler {
           this.lastAddedPoint = null
           this.config.onStrokeStart(e, false)
         }
+        perf.endMeasure(startTime, 'pointerdown-pen');
         return
       }
 
       if (e.pointerType === 'touch') {
         this.activeTouchCount++
-        if (this.penIsOnScreen) return
+        if (this.penIsOnScreen) {
+          perf.endMeasure(startTime, 'pointerdown-touch-ignored');
+          return
+        }
         
         if (this.activeTouchCount > 1) {
           if (this.mode === 'drawing-finger') this.config.onStrokeEnd()
           this.mode = this.activeTouchCount === 2 ? 'zooming' : 'idle'
+          perf.endMeasure(startTime, 'pointerdown-touch-multi');
           return
         }
 
@@ -140,6 +147,8 @@ export class InputHandler {
           this.mode = 'scrolling'
           this.canvas.setPointerCapture(e.pointerId)
         }
+        perf.endMeasure(startTime, 'pointerdown-touch');
+        return
       }
 
       if (e.pointerType === 'mouse') {
@@ -154,15 +163,19 @@ export class InputHandler {
           this.lastAddedPoint = null
           this.config.onStrokeStart(e, false)
         }
+        perf.endMeasure(startTime, 'pointerdown-mouse');
       }
     }) as EventListener
 
     this.boundListeners.pointermove = ((e: PointerEvent) => {
+      const startTime = perf.startMeasure('pointermove');
       this.lastPointerEvent = e
       const rect = this.canvas.getBoundingClientRect()
-      const world = this.transform.screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
 
-      if (this.mode === 'idle') return
+      if (this.mode === 'idle') {
+        perf.endMeasure(startTime, 'pointermove-idle');
+        return
+      }
 
       if (this.mode === 'scrolling' && e.pointerType === 'touch') {
         const dx = e.clientX - this.lastTouchX
@@ -170,12 +183,14 @@ export class InputHandler {
         this.config.onPan(dx * 0.6, dy * 0.6)
         this.lastTouchX = e.clientX
         this.lastTouchY = e.clientY
+        perf.endMeasure(startTime, 'pointermove-scroll');
         return
       }
 
       if (this.mode === 'erasing') {
         if (e.pointerType === 'touch' && this.penIsOnScreen) return
         this.handleEraserMove(e)
+        perf.endMeasure(startTime, 'pointermove-erase');
         return
       }
 
@@ -196,13 +211,24 @@ export class InputHandler {
           }
         }
         if (points.length > 0) this.config.onStrokeMove(points)
+        perf.endMeasure(startTime, 'pointermove-draw');
       }
     }) as EventListener
 
     this.boundListeners.pointerup = ((e: PointerEvent) => {
+      const startTime = perf.startMeasure('pointerup');
+      
+      // IMMEDIATE: Release pointer capture so the OS knows we are done.
+      try {
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+          this.canvas.releasePointerCapture(e.pointerId)
+        }
+      } catch (err) {}
+
       if (e.pointerType === 'pen') {
         this.penIsOnScreen = false
         if (this.mode === 'drawing-pen' || this.mode === 'erasing') this.finishInput()
+        perf.endMeasure(startTime, 'pointerup-pen');
         return
       }
       if (e.pointerType === 'touch') {
@@ -211,19 +237,17 @@ export class InputHandler {
           this.finishInput()
         }
         if (this.activeTouchCount === 0) this.mode = 'idle'
+        perf.endMeasure(startTime, 'pointerup-touch');
+        return
       }
-      if (e.pointerType === 'mouse') this.finishInput()
-
-      try {
-        if (this.canvas.hasPointerCapture(e.pointerId)) {
-          this.canvas.releasePointerCapture(e.pointerId)
-        }
-      } catch (err) {
-        // Capture might have been lost already
+      if (e.pointerType === 'mouse') {
+        this.finishInput()
+        perf.endMeasure(startTime, 'pointerup-mouse');
       }
     }) as EventListener
 
     this.boundListeners.pointercancel = ((e: PointerEvent) => {
+      const startTime = perf.startMeasure('pointercancel');
       if (e.pointerType === 'pen') this.penIsOnScreen = false
       if (e.pointerType === 'touch') this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
       this.finishInput()
@@ -233,6 +257,7 @@ export class InputHandler {
           this.canvas.releasePointerCapture(e.pointerId)
         }
       } catch (err) {}
+      perf.endMeasure(startTime, 'pointercancel');
     }) as EventListener
 
     this.canvas.addEventListener('pointerdown', this.boundListeners.pointerdown)

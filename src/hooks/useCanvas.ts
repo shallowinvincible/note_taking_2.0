@@ -2,16 +2,18 @@ import { useEffect, useRef, useCallback } from 'react'
 import { TransformSystem } from '@/canvas/TransformSystem'
 import { InputHandler } from '@/canvas/InputHandler'
 import { UndoRedoStack } from '@/canvas/UndoRedo'
-import { renderActiveStroke, renderStroke, renderStrokeToWorld } from '@/canvas/StrokeEngine'
+import { renderActiveStroke, renderStroke } from '@/canvas/StrokeEngine'
 import { renderBackground } from '@/canvas/BackgroundRenderer'
 import { EraserSystem } from '@/canvas/EraserSystem'
+import { PageManager } from '@/canvas/PageManager'
+import { perf } from '@/canvas/PerformanceMonitor'
 import { useToolStore, invertStrokes } from '@/store/toolStore'
 import { useCanvasStore } from '@/store/canvasStore'
 import { computeBBox, type Point, type Stroke } from '@/types/stroke'
 
 const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
-const BUFFER_SCALE = 3.0 // 3x resolution for infinite-quality print/zoom
+const BUFFER_SCALE = 3.0 
 
 export function useCanvas() {
   const bgCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -19,9 +21,8 @@ export function useCanvas() {
   const activeCanvasRef = useRef<HTMLCanvasElement>(null)
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null)
   
-  // Offscreen buffer for world-space stroke cache (O(1) Rendering)
-  const offscreenRef = useRef<OffscreenCanvas | null>(null)
-  const offscreenCtxRef = useRef<OffscreenCanvasRenderingContext2D | null>(null)
+  // Page-based buffer management
+  const pageManagerRef = useRef(new PageManager(PAGE_WIDTH_WORLD, A4_HEIGHT_WORLD, BUFFER_SCALE))
 
   const transformRef = useRef(new TransformSystem())
   const eraserRef = useRef(new EraserSystem())
@@ -40,68 +41,55 @@ export function useCanvas() {
     pageHeight, currentPageBottom 
   } = useCanvasStore()
 
-  // --- Rendering Architecture (O(1) Zoom/Pan) ---
-
-  const initOffscreenCanvas = useCallback((width: number, height: number) => {
-    const canvas = new OffscreenCanvas(width * BUFFER_SCALE, height * BUFFER_SCALE)
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.imageSmoothingEnabled = false
-    }
-    offscreenRef.current = canvas
-    offscreenCtxRef.current = ctx
-  }, [])
-
+  // --- Rendering Architecture (Virtualized Tiled Rendering) ---
+  
   const redrawCachedLayerFromBuffer = useCallback(() => {
+    const startTime = perf.startMeasure('redrawCachedLayer');
+    
     const canvas = committedCanvasRef.current
     const ctx = canvas?.getContext('2d')
-    if (!ctx || !canvas || !offscreenRef.current) return
+    if (!ctx || !canvas) return
     
+    // Clear the main viewing area
+    const dpr = window.devicePixelRatio || 1
     ctx.save()
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.restore()
-    
-    // Ensure DPR scale (Cause A fix)
-    const dpr = window.devicePixelRatio || 1
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.scale(dpr, dpr)
     
-    // Draw directly from world-space buffer using current transform
-    const destX = transformRef.current.worldToScreen(0, 0).x
-    const destY = transformRef.current.worldToScreen(0, 0).y
-    const zoom = transformRef.current.zoom
+    // Render only visible pages
+    const { panX, panY, zoom } = transformRef.current;
+    const viewportHeight = canvas.height / dpr;
+    const viewportWidth = canvas.width / dpr;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    const metrics = pageManagerRef.current.renderToScreen(
+      ctx,
+      panX, 
+      panY, 
+      zoom, 
+      viewportWidth,
+      viewportHeight,
+      undoRedoRef.current.getStrokes(),
+      pressureEnabled,
+      eraserRef.current.pendingErase
+    );
     
-    // Rely on true offscreen dimensions to prevent React state closure lag
-    const bufferHeight = offscreenRef.current.height
+    ctx.restore();
     
-    const destW = PAGE_WIDTH_WORLD * zoom
-    const destH = (bufferHeight / BUFFER_SCALE) * zoom
-    
-    const roundedX = Math.round(destX)
-    const roundedY = Math.round(destY)
-    const roundedW = Math.round(destW)
-    const roundedH = Math.round(destH)
-    
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(
-      offscreenRef.current,
-      0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, bufferHeight,     // Source (Width already scaled, height is raw buffer height)
-      roundedX, roundedY, roundedW, roundedH  // Dest
-    )
+    perf.recordFrame(perf.endMeasure(startTime, 'redrawCachedLayer'));
   }, [])
 
   const rebuildOffscreenCanvas = useCallback(() => {
-    if (!offscreenCtxRef.current || !offscreenRef.current) return
-    const bufferHeight = offscreenRef.current.height
-    offscreenCtxRef.current.clearRect(0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, bufferHeight)
-    
-    const strokes = undoRedoRef.current.getStrokes()
-    for (const stroke of strokes) {
-      if (eraserRef.current.pendingErase.has(stroke.id)) continue
-      renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled, BUFFER_SCALE)
-    }
+    const startTime = perf.startMeasure('rebuildOffscreenCanvas');
+    pageManagerRef.current.rebuildPages(
+      undoRedoRef.current.getStrokes(),
+      pressureEnabled,
+      eraserRef.current.pendingErase
+    );
+    perf.endMeasure(startTime, 'rebuildOffscreenCanvas');
   }, [pressureEnabled])
 
   const fullRedrawCachedLayer = useCallback(() => {
@@ -154,7 +142,7 @@ export function useCanvas() {
   const renderWithErasePreview = useCallback(() => {
     const canvas = committedCanvasRef.current
     const ctx = canvas?.getContext('2d')
-    if (!ctx || !canvas || !offscreenRef.current) return
+    if (!ctx || !canvas) return
 
     redrawCachedLayerFromBuffer()
 
@@ -198,6 +186,16 @@ export function useCanvas() {
     }
     renderActiveLayer()
     
+    // Performance Tracking (Requirement 9)
+    if (perf.debugEnabled) {
+      const { start, end } = pageManagerRef.current.getVisiblePageRange(transformRef.current.panY, transformRef.current.zoom, window.innerHeight);
+      const pgMetrics = pageManagerRef.current.getMetrics(end - start + 1);
+      const pfMetrics = perf.getMetrics();
+      if (time % 1000 < 20) { // log roughly once per second
+        console.log(`[PERF] FPS: ${pfMetrics.fps} | VisPages: ${pgMetrics.visible}/${pgMetrics.total} | Mem: ${pgMetrics.memoryEstimate}`);
+      }
+    }
+
     if (isEraserAnimating) {
       renderPendingRef.current = true
       requestAnimationFrame(renderLoop)
@@ -220,45 +218,19 @@ export function useCanvas() {
   }))
 
   // --- Lifecycle & Initialization ---
-
+  
+  /** 
+   * Incremental Page Creation (Requirement 5)
+   * Adding a page is now O(1) as it only updates state. 
+   * Buffers are created on-demand during the next render.
+   */
   const extendPage = useCallback(() => {
-    const panBefore = { x: transformRef.current.panX, y: transformRef.current.panY }
-    const zoomBefore = transformRef.current.zoom
-
-    const oldHeight = pageHeight
     const newHeight = pageHeight + A4_HEIGHT_WORLD
     setPageHeight(newHeight)
     setCurrentPageBottom(currentPageBottom + A4_HEIGHT_WORLD)
 
-    // Grow offscreen canvas (Scaled Copy)
-    const newBuffer = new OffscreenCanvas(PAGE_WIDTH_WORLD * BUFFER_SCALE, newHeight * BUFFER_SCALE)
-    const newCtx = newBuffer.getContext('2d')
-    if (newCtx && offscreenRef.current) {
-      newCtx.imageSmoothingEnabled = false
-      // Copy ALL existing stroke pixels from old canvas into new one
-      if (oldHeight > 0) {
-        newCtx.drawImage(
-          offscreenRef.current, 
-          0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, oldHeight * BUFFER_SCALE, 
-          0, 0, PAGE_WIDTH_WORLD * BUFFER_SCALE, oldHeight * BUFFER_SCALE
-        )
-      }
-      offscreenRef.current = newBuffer
-      offscreenCtxRef.current = newCtx
-    }
-
     renderBackgroundLayer()
     redrawCachedLayerFromBuffer()
-
-    if (transformRef.current.panX !== panBefore.x || transformRef.current.panY !== panBefore.y) {
-      console.error('BUG: panOffset changed during extendPage!', 'before:', panBefore, 'after:', {x: transformRef.current.panX, y: transformRef.current.panY})
-      transformRef.current.panX = panBefore.x
-      transformRef.current.panY = panBefore.y
-    }
-    if (transformRef.current.zoom !== zoomBefore) {
-      console.error('BUG: zoomLevel changed during extendPage!')
-      transformRef.current.zoom = zoomBefore
-    }
   }, [pageHeight, currentPageBottom, setPageHeight, setCurrentPageBottom, renderBackgroundLayer, redrawCachedLayerFromBuffer])
 
   const initializeCanvasView = useCallback(() => {
@@ -281,8 +253,7 @@ export function useCanvas() {
       }
     })
 
-    initOffscreenCanvas(PAGE_WIDTH_WORLD, pageHeight)
-
+    // initOffscreenCanvas call removed - PageManager handles lazily
     const horizontalPadding = 80
     const fitZoom = (cssWidth - horizontalPadding) / PAGE_WIDTH_WORLD
     transformRef.current.zoom = fitZoom
@@ -295,7 +266,7 @@ export function useCanvas() {
     fullRedrawCachedLayer()
     renderBackgroundLayer()
     scheduleRender()
-  }, [pageHeight, initOffscreenCanvas, fullRedrawCachedLayer, renderBackgroundLayer, setTransform, scheduleRender])
+  }, [pageHeight, fullRedrawCachedLayer, renderBackgroundLayer, setTransform, scheduleRender])
 
   useEffect(() => {
     hydrate()
@@ -429,6 +400,7 @@ export function useCanvas() {
         scheduleRender()
       },
       onStrokeEnd: () => {
+        const startTime = perf.startMeasure('onStrokeEnd-Handler');
         if (currentPointsRef.current.length > 1) {
           const stroke: Stroke = {
             id: crypto.randomUUID(),
@@ -440,28 +412,35 @@ export function useCanvas() {
             createdAt: Date.now(),
             simulatePressure: useToolStore.getState().activeTool === 'finger' || !useToolStore.getState().pressureEnabled
           }
-          undoRedoRef.current.push({ type: 'ADD_STROKE', stroke })
-          
-          // Accumulate directly to offscreen and visible cache (Zero lag)
-          if (offscreenCtxRef.current) {
-            renderStrokeToWorld(offscreenCtxRef.current, stroke, pressureEnabled, BUFFER_SCALE)
-          }
-          const committedCtx = committedCanvasRef.current?.getContext('2d')
-          if (committedCtx) {
-            renderStroke(committedCtx, stroke, transformRef.current, 1.0, pressureEnabled)
-          }
 
-          // Full redraw once to ensure buffer and screen are pixel-perfect sync
-          redrawCachedLayerFromBuffer()
+          // ASYNCHRONOUS COMMIT (Requirement 1)
+          // We move the heavy lifting out of the immediate pointer event handler.
+          queueMicrotask(() => {
+            const commitStartTime = perf.startMeasure('commitStroke-Async');
+            
+            undoRedoRef.current.push({ type: 'ADD_STROKE', stroke })
+            
+            // Accumulate directly to relevant page buffers
+            pageManagerRef.current.renderStrokeToPages(stroke, pressureEnabled);
 
-          // Relative threshold extension
-          const triggerY = currentPageBottom - 561
-          if (stroke.bbox.maxY > triggerY) {
-            extendPage()
-          }
+            // Draw once to visible layer for instant feedback
+            const committedCtx = committedCanvasRef.current?.getContext('2d');
+            if (committedCtx) {
+              renderStroke(committedCtx, stroke, transformRef.current, 1.0, pressureEnabled);
+            }
+            
+            // Relative threshold extension
+            const triggerY = currentPageBottom - 561
+            if (stroke.bbox.maxY > triggerY) {
+              extendPage()
+            }
+
+            perf.endMeasure(commitStartTime, 'commitStroke-Async');
+          });
         }
         currentPointsRef.current = []
         scheduleRender()
+        perf.endMeasure(startTime, 'onStrokeEnd-Handler');
       },
       onEraserMove: (worldX, worldY, screenX, screenY) => {
         eraserRef.current.lastScreenPos = { x: screenX, y: screenY }
