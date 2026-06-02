@@ -130,7 +130,10 @@ export class InputHandler {
           this.finishInput();
         }
 
-        this.canvas.setPointerCapture(e.pointerId)
+        // OPTIMIZATION: Remove Pointer Capture for Pencil (Requirement - Remove capture for Pencil)
+        // Only mouse and fingers need capture usually.
+        // For Pencil, direct events are more reliable in Safari.
+        // this.canvas.setPointerCapture(e.pointerId)
         
         if (this.config.getActiveTool() === 'eraser') {
           this.mode = 'erasing'

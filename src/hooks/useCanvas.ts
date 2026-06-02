@@ -444,18 +444,24 @@ export function useCanvas() {
       },
       onStrokeEnd: () => {
         const startTime = perf.startMeasure('onStrokeEnd-Handler');
-        if (currentPointsRef.current.length > 1) {
+        const points = [...currentPointsRef.current];
+        currentPointsRef.current = []; // HARD RESET: Clear state immediately (Requirement - Hard Reset)
+        scheduleRender(); // Clear active layer immediately
+
+        if (points.length > 1) {
           const stroke: Stroke = {
             id: crypto.randomUUID(),
             tool: useToolStore.getState().activeTool,
             color: useToolStore.getState().penColor,
             width: useToolStore.getState().penWidth,
-            points: [...currentPointsRef.current],
-            bbox: computeBBox(currentPointsRef.current),
+            points: points,
+            bbox: computeBBox(points),
             createdAt: Date.now(),
             simulatePressure: useToolStore.getState().activeTool === 'finger' || !useToolStore.getState().pressureEnabled
           }
 
+          // DECOUPLED COMMIT (Requirement - Separate Input from Commit)
+          // Moving heavy operations to microtask allows the thread to process the next pointerdown immediately.
           queueMicrotask(() => {
             const commitStartTime = perf.startMeasure('commitStroke-Async');
             undoRedoRef.current.push({ type: 'ADD_STROKE', stroke })
@@ -471,8 +477,6 @@ export function useCanvas() {
             perf.endMeasure(commitStartTime, 'commitStroke-Async');
           });
         }
-        currentPointsRef.current = []
-        scheduleRender()
         perf.endMeasure(startTime, 'onStrokeEnd-Handler');
       },
       onEraserMove: (worldX, worldY, screenX, screenY) => {
