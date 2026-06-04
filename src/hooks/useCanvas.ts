@@ -10,53 +10,71 @@ import { perf } from '@/canvas/PerformanceMonitor'
 import { useToolStore, invertStrokes } from '@/store/toolStore'
 import { useCanvasStore } from '@/store/canvasStore'
 import { computeBBox, genId, type Point, type Stroke } from '@/types/stroke'
+import { db } from '@/storage/db'
+import { createPageSession } from '@/crdt/yjsSetup'
+import { useNotebookStore } from '@/store/notebookStore'
+import * as Y from 'yjs'
+import { createPage } from '@/storage/pages'
 
 const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
-const BUFFER_SCALE = 3.0 
+const BUFFER_SCALE = 3.0
 
 export function useCanvas() {
   const bgCanvasRef = useRef<HTMLCanvasElement>(null)
   const committedCanvasRef = useRef<HTMLCanvasElement>(null)
   const activeCanvasRef = useRef<HTMLCanvasElement>(null)
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null)
-  
+
   // Page-based buffer management
   const pageManagerRef = useRef(new PageManager(PAGE_WIDTH_WORLD, A4_HEIGHT_WORLD, BUFFER_SCALE))
 
   const transformRef = useRef(new TransformSystem())
   const eraserRef = useRef(new EraserSystem())
-  
+
   const currentPointsRef = useRef<Point[]>([])
   const inputHandlerRef = useRef<InputHandler | null>(null)
   const renderPendingRef = useRef(false)
   const lastTimeRef = useRef(performance.now())
+  // Guards initializeCanvasView — only reset pan/zoom when a NEW page is opened,
+  // never when tool state (color, mode, dark mode, etc.) triggers a re-render.
+  const lastInitializedPageIdRef = useRef<string | null>(null)
 
-  const { 
+  const {
     activeTool, penColor, penWidth, eraserRadius, pressureEnabled,
-    background, darkMode, hydrate 
+    background, darkMode, hydrate
   } = useToolStore()
-  const { 
-    setTransform, setPageHeight, setCurrentPageBottom, setUndoRedo, 
-    pageHeight, currentPageBottom 
+  const {
+    setTransform, setPageHeight, setCurrentPageBottom, setUndoRedo,
+    pageHeight, currentPageBottom
   } = useCanvasStore()
 
-  // --- Rendering Architecture (Virtualized Tiled Rendering) ---
+  const {
+    activeNotebook,
+    activePage,
+    pages,
+    setPages,
+    setAutosaving
+  } = useNotebookStore()
   
+  const pageId = activePage?.id || null
+
+  // --- Rendering Architecture (Virtualized Tiled Rendering) ---
+
   const redrawCachedLayerFromBuffer = useCallback(() => {
     const startTime = perf.startMeasure('redrawCachedLayer');
-    
+
     const canvas = committedCanvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!ctx || !canvas) return
-    
+
     // Clear the main viewing area
     const dpr = window.devicePixelRatio || 1
     ctx.save()
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.scale(dpr, dpr)
-    
+
     // Render only visible pages
     const { panX, panY, zoom } = transformRef.current;
     const viewportHeight = canvas.height / dpr;
@@ -67,18 +85,18 @@ export function useCanvas() {
 
     const metrics = pageManagerRef.current.renderToScreen(
       ctx,
-      panX, 
-      panY, 
-      zoom, 
+      panX,
+      panY,
+      zoom,
       viewportWidth,
       viewportHeight,
       undoRedoRef.current.getStrokes(),
       pressureEnabled,
       eraserRef.current.pendingErase
     );
-    
+
     ctx.restore();
-    
+
     perf.recordFrame(perf.endMeasure(startTime, 'redrawCachedLayer'));
   }, [pressureEnabled])
 
@@ -101,7 +119,7 @@ export function useCanvas() {
     const canvas = activeCanvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!ctx || !canvas) return
-    
+
     const dpr = window.devicePixelRatio || 1
     ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr)
     if (currentPointsRef.current.length < 1) return
@@ -148,7 +166,7 @@ export function useCanvas() {
 
     const zoom = transformRef.current.zoom
     const strokes = undoRedoRef.current.getStrokes()
-    
+
     for (const strokeId of eraserRef.current.pendingErase) {
       const stroke = strokes.find(s => s.id === strokeId)
       if (!stroke) continue
@@ -156,7 +174,7 @@ export function useCanvas() {
       const { x: sx, y: sy } = transformRef.current.worldToScreen(stroke.bbox.minX - 4, stroke.bbox.minY - 4)
       const sw = (stroke.bbox.maxX - stroke.bbox.minX + 8) * zoom
       const sh = (stroke.bbox.maxY - stroke.bbox.minY + 8) * zoom
-      
+
       ctx.fillStyle = darkMode ? '#1e1e1e' : '#ffffff'
       ctx.fillRect(sx, sy, sw, sh)
 
@@ -173,7 +191,7 @@ export function useCanvas() {
 
     const isEraserAnimating = eraserRef.current.tick(dt)
     const deletedIds = eraserRef.current.getDeletedAndClear()
-    
+
     if (deletedIds.length > 0) {
       const strokesToRemove = undoRedoRef.current.getStrokes().filter(s => deletedIds.includes(s.id))
       if (strokesToRemove.length > 0) {
@@ -182,10 +200,10 @@ export function useCanvas() {
     }
 
     if (isEraserAnimating) {
-       renderWithErasePreview()
+      renderWithErasePreview()
     }
     renderActiveLayer()
-    
+
     // Performance Tracking (Requirement 9)
     if (perf.debugEnabled) {
       const { start, end } = pageManagerRef.current.getVisiblePageRange(transformRef.current.panY, transformRef.current.zoom, window.innerHeight);
@@ -196,7 +214,16 @@ export function useCanvas() {
       }
     }
 
+    // Update active page explicitly for UI counting
+    const viewportCenterWorldY = transformRef.current.panY + (window.innerHeight / 2 / transformRef.current.zoom);
+    const newIdx = Math.max(1, Math.floor(viewportCenterWorldY / A4_HEIGHT_WORLD) + 1);
+    const store = useCanvasStore.getState();
+    if (newIdx !== store.activePageIndex && newIdx > 0 && newIdx <= useNotebookStore.getState().pages.length) {
+       store.setActivePageIndex(newIdx);
+    }
+
     if (isEraserAnimating) {
+
       renderPendingRef.current = true
       requestAnimationFrame(renderLoop)
     }
@@ -214,7 +241,7 @@ export function useCanvas() {
 
   const undoRedoRef = useRef<UndoRedoStack>(new UndoRedoStack([], (strokes, action) => {
     updateUndoRedoState()
-    
+
     // REQUIREMENT 3/4: High-Performance incremental path.
     // If we just added a stroke, the incremental render already happened.
     // We only need a full rebuild for undo/redo or batched erasers.
@@ -224,20 +251,30 @@ export function useCanvas() {
   }))
 
   // --- Lifecycle & Initialization ---
-  
+
   /** 
    * Incremental Page Creation (Requirement 5)
    * Adding a page is now O(1) as it only updates state. 
    * Buffers are created on-demand during the next render.
    */
-  const extendPage = useCallback(() => {
-    const newHeight = pageHeight + A4_HEIGHT_WORLD
-    setPageHeight(newHeight)
-    setCurrentPageBottom(currentPageBottom + A4_HEIGHT_WORLD)
+  const extendPage = useCallback(async () => {
+    if (!activeNotebook) return
+    // AUTO-SPAWN NEW DISCRETE PAGE
+    const newPage = await createPage(activeNotebook.id, background)
+    const updatedList = [...pages, newPage]
+    setPages(updatedList)
+    setPageHeight(updatedList.length * A4_HEIGHT_WORLD)
+    setCurrentPageBottom(updatedList.length * A4_HEIGHT_WORLD)
+  }, [activeNotebook, background, pages, setPages, setPageHeight, setCurrentPageBottom])
 
+  const scrollPageIntoView = useCallback((pageIndex: number) => {
+    const targetY = pageIndex * A4_HEIGHT_WORLD - 40 / transformRef.current.zoom
+    transformRef.current.panY = targetY
+    setTransform(transformRef.current.zoom, transformRef.current.panX, transformRef.current.panY)
     renderBackgroundLayer()
     redrawCachedLayerFromBuffer()
-  }, [pageHeight, currentPageBottom, setPageHeight, setCurrentPageBottom, renderBackgroundLayer, redrawCachedLayerFromBuffer])
+    scheduleRender()
+  }, [renderBackgroundLayer, redrawCachedLayerFromBuffer, scheduleRender, setTransform])
 
   const initializeCanvasView = useCallback(() => {
     const dpr = window.devicePixelRatio || 1
@@ -282,7 +319,7 @@ export function useCanvas() {
     const onMouseMove = (e: MouseEvent) => {
       const curCtx = cursorCanvasRef.current?.getContext('2d')
       if (!curCtx || !cursorCanvasRef.current) return
-      
+
       curCtx.save()
       curCtx.setTransform(1, 0, 0, 1, 0, 0)
       curCtx.clearRect(0, 0, cursorCanvasRef.current.width, cursorCanvasRef.current.height)
@@ -290,7 +327,7 @@ export function useCanvas() {
 
       const wx = transformRef.current.screenToWorld(e.clientX, e.clientY).x
       const wy = transformRef.current.screenToWorld(e.clientX, e.clientY).y
-      
+
       const onPage = wx >= 0 && wx <= PAGE_WIDTH_WORLD && wy >= 0 && wy <= useCanvasStore.getState().pageHeight
       if (!onPage) {
         cursorCanvasRef.current.style.cursor = 'default'
@@ -339,7 +376,7 @@ export function useCanvas() {
 
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseleave', onMouseLeave)
-    
+
     return () => {
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseleave', onMouseLeave)
@@ -378,21 +415,25 @@ export function useCanvas() {
     return () => window.removeEventListener('resize', onResize)
   }, [redrawCachedLayerFromBuffer, renderBackgroundLayer, scheduleRender])
 
-  const initialized = useRef(false)
   useEffect(() => {
-    if (!initialized.current) {
-      initializeCanvasView()
-      initialized.current = true
+    if (pageId && bgCanvasRef.current && committedCanvasRef.current) {
+      // Only reset zoom/pan when switching to a DIFFERENT page (or opening for the first time).
+      // If this effect re-runs because initializeCanvasView got a new reference due to a
+      // tool state change, the ref guard below prevents the view from jumping to the top.
+      if (pageId !== lastInitializedPageIdRef.current) {
+        lastInitializedPageIdRef.current = pageId
+        initializeCanvasView()
+      }
     }
-  }, [initializeCanvasView])
+  }, [pageId, initializeCanvasView])
 
   // --- Input Handling Lifecycle (Requirement 1 - Stable Input) ---
-  
-  // 1. Creation/Destruction (Only when canvas changes)
+
+  // 1. Creation/Destruction (Only when canvas changes or page changes)
   useEffect(() => {
     const canvas = activeCanvasRef.current
     if (!canvas) return
-    
+
     // Create a dummy config initially
     const config: InputHandlerConfig = {
       canvas,
@@ -401,18 +442,18 @@ export function useCanvas() {
       getInputMode: () => useToolStore.getState().inputMode,
       isPressureEnabled: () => useToolStore.getState().pressureEnabled,
       getPageHeight: () => useCanvasStore.getState().pageHeight,
-      onStrokeStart: () => {},
-      onStrokeMove: () => {},
-      onStrokeEnd: () => {},
-      onEraserMove: () => {},
-      onEraserStart: () => {},
-      onEraserEnd: () => {},
-      onScroll: () => {},
-      onZoom: () => {},
-      onPan: () => {},
-      onRenderRequest: () => {}
+      onStrokeStart: () => { },
+      onStrokeMove: () => { },
+      onStrokeEnd: () => { },
+      onEraserMove: () => { },
+      onEraserStart: () => { },
+      onEraserEnd: () => { },
+      onScroll: () => { },
+      onZoom: () => { },
+      onPan: () => { },
+      onRenderRequest: () => { }
     }
-    
+
     inputHandlerRef.current = new InputHandler(config)
 
     return () => {
@@ -421,7 +462,7 @@ export function useCanvas() {
         inputHandlerRef.current = null
       }
     }
-  }, []) // Empty dependency array means it only runs on mount/unmount
+  }, [pageId]) // Empty dependency array means it only runs on mount/unmount
 
   // 2. Dynamic Configuration Updates
   useEffect(() => {
@@ -519,22 +560,123 @@ export function useCanvas() {
 
   useEffect(() => {
     const inverted = invertStrokes(undoRedoRef.current.getStrokes(), darkMode)
-    // Mutating undo/redo strokes array specifically to flip colors globally.
-    ;(undoRedoRef.current as any).strokes = inverted
+      // Mutating undo/redo strokes array specifically to flip colors globally.
+      ; (undoRedoRef.current as any).strokes = inverted
     fullRedrawCachedLayer()
     renderBackgroundLayer()
     scheduleRender()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [darkMode])
 
+  // Redraw background when template background option or page height changes
+  useEffect(() => {
+    renderBackgroundLayer()
+    scheduleRender()
+  }, [background, pageHeight, renderBackgroundLayer, scheduleRender])
+
+  // Synchronize Yjs session with all pages for continuous multi-page rendering
+  const pageIdsStr = pages.map(p => p.id).join(',')
+  const activeSessionsRef = useRef<Map<string, any>>(new Map())
+  const activeObserversRef = useRef<Map<string, (event: Y.YArrayEvent<Stroke>) => void>>(new Map())
+
+  useEffect(() => {
+    if (!activeNotebook || pages.length === 0) {
+      if (activeSessionsRef.current.size > 0) {
+        undoRedoRef.current.setSessions(new Map(), [])
+        activeSessionsRef.current.forEach(s => s.persistence?.destroy())
+        activeSessionsRef.current.clear()
+        activeObserversRef.current.clear()
+        fullRedrawCachedLayer()
+      }
+      return
+    }
+
+    let mounted = true
+    const currentIds = pages.map(p => p.id)
+    
+    // Destroy removed sessions (e.g., notebook switched or page deleted)
+    const currentKeys = Array.from(activeSessionsRef.current.keys())
+    const oldIds = currentKeys.filter(id => !currentIds.includes(id))
+    oldIds.forEach(id => {
+      const s = activeSessionsRef.current.get(id)
+      const obs = activeObserversRef.current.get(id)
+      if (obs) s.strokesArray.unobserve(obs)
+      s.persistence?.destroy()
+      activeSessionsRef.current.delete(id)
+      activeObserversRef.current.delete(id)
+    })
+
+    // Initialize new sessions
+    const newIds = currentIds.filter(id => !activeSessionsRef.current.has(id))
+    
+    if (newIds.length > 0) {
+      const initNew = async () => {
+        const newSessions = new Map<string, any>()
+        for (const pageId of newIds) {
+          const session = createPageSession(pageId)
+          newSessions.set(pageId, session)
+          activeSessionsRef.current.set(pageId, session)
+        }
+
+        await Promise.all(
+          Array.from(newSessions.values()).map(s => s.syncedPromise)
+        )
+
+        if (!mounted) return
+
+        // Set up observers for new sessions
+        for (const [pageId, session] of newSessions.entries()) {
+          const observer = async (event: Y.YArrayEvent<Stroke>) => {
+            if (!mounted) return
+            const currentStrokes = session.strokesArray.toArray()
+            updateUndoRedoState()
+
+            if (event.transaction.origin !== 'local-add') {
+              fullRedrawCachedLayer()
+            }
+
+            setAutosaving(true)
+            try {
+              await db.transaction('rw', [db.strokes], async () => {
+                await db.strokes.where('pageId').equals(pageId).delete()
+                if (currentStrokes.length > 0) {
+                  const strokesToSave = currentStrokes.map((s: Stroke) => ({ ...s, pageId }))
+                  await db.strokes.bulkPut(strokesToSave)
+                }
+              })
+            } catch (err) {
+              console.error('Dexie save error:', err)
+            } finally {
+              setTimeout(() => setAutosaving(false), 500)
+            }
+          }
+          session.strokesArray.observe(observer)
+          activeObserversRef.current.set(pageId, observer)
+        }
+
+        undoRedoRef.current.setSessions(activeSessionsRef.current, pages.map(p => p.id))
+        fullRedrawCachedLayer()
+      }
+      initNew()
+    } else {
+      // Just update array order if needed
+      undoRedoRef.current.setSessions(activeSessionsRef.current, pages.map(p => p.id))
+    }
+
+    return () => {
+      mounted = false
+      // Note: We deliberately do NOT destroy sessions here during cleanup of this effect,
+      // so active sessions survive across dynamic page additions! Cleanups happen top-down 
+      // or during standard unmount lifecycle if we wanted to (handled partly by top if-check).
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeNotebook, pageIdsStr, fullRedrawCachedLayer, updateUndoRedoState, setAutosaving])
+
   return {
     bgCanvasRef, committedCanvasRef, activeCanvasRef, cursorCanvasRef,
-    undo: () => { 
-      undoRedoRef.current.undo(); 
-    },
-    redo: () => { 
-      undoRedoRef.current.redo(); 
-    },
-    fitPage: initializeCanvasView
+    undo: () => undoRedoRef.current.undo(),
+    redo: () => undoRedoRef.current.redo(),
+    fitPage: initializeCanvasView,
+    scrollToPage: scrollPageIntoView
   }
 }

@@ -3,18 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "dexie": "^4.4.3",
     "lucide-react": "^1.17.0",
     "next": "14.2.3",
     "next-pwa": "^5.6.0",
     "perfect-freehand": "^1.2.2",
     "react": "^18",
     "react-dom": "^18",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.31",
     "zustand": "^4.5.2"
   },
   "devDependencies": {

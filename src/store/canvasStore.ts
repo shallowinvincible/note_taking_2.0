@@ -9,11 +9,12 @@ interface CanvasState {
   currentPageBottom: number
   canUndo: boolean
   canRedo: boolean
-
+  activePageIndex: number
   setTransform: (zoom: number, panX: number, panY: number) => void
   setPageHeight: (height: number) => void
   setCurrentPageBottom: (bottom: number) => void
   setUndoRedo: (undo: boolean, redo: boolean) => void
+  setActivePageIndex: (index: number) => void
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -25,9 +26,11 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   currentPageBottom: 1122,
   canUndo: false,
   canRedo: false,
+  activePageIndex: 1,
 
   setTransform: (zoom, panX, panY) => set({ zoom, panX, panY }),
   setPageHeight: (pageHeight) => set({ pageHeight }),
   setCurrentPageBottom: (currentPageBottom) => set({ currentPageBottom }),
-  setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo })
+  setUndoRedo: (canUndo, canRedo) => set({ canUndo, canRedo }),
+  setActivePageIndex: (activePageIndex) => set({ activePageIndex })
 }))

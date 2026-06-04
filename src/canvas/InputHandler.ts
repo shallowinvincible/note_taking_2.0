@@ -57,6 +57,7 @@ export class InputHandler {
     this.canvas = config.canvas
     this.transform = config.transform
     this.config = config
+    if (!this.canvas) return
     this.canvas.style.touchAction = 'none'
     this.setupPointerEvents()
     this.setupTouchEvents()
@@ -176,7 +177,7 @@ export class InputHandler {
     const prevMode = this.mode
     this.mode = 'idle'
     this.activePenPointerId = null
-    
+
     if (prevMode === 'erasing') {
       this.config.onEraserEnd()
     } else if (prevMode === 'drawing-pen' || prevMode === 'drawing-finger') {
@@ -188,14 +189,18 @@ export class InputHandler {
 
   private setupPointerEvents() {
     const onPointerDown = (e: PointerEvent) => {
-      // 1. EXCLUDE TOOLBAR FROM CAPTURE
-      if (e.target instanceof Element && e.target.closest('#main-toolbar')) return
+      // 1. EXCLUDE FLOATING UI FROM CAPTURE
+      if (e.target instanceof Element && (
+        e.target.closest('#main-toolbar') || 
+        e.target.closest('#header-left') || 
+        e.target.closest('#header-right')
+      )) return
 
       this.lastPointerEvent = e
 
       if (e.pointerType === 'pen') {
         if (DEBUG_PENCIL) console.log(`[PENCIL] ↓ down id=${e.pointerId} mode=${this.mode}`);
-        
+
         // Use coordinates to determine if it should be a stroke
         if (!this.isOverCanvas(e.clientX, e.clientY)) return
 
@@ -287,7 +292,7 @@ export class InputHandler {
         if (this.canvas.hasPointerCapture(e.pointerId)) {
           this.canvas.releasePointerCapture(e.pointerId)
         }
-      } catch (_) {}
+      } catch (_) { }
 
       if (e.pointerType === 'pen') {
         if (DEBUG_PENCIL) console.log(`[PENCIL] ↑ up id=${e.pointerId} mode=${this.mode}`);
@@ -324,7 +329,7 @@ export class InputHandler {
         if (this.canvas.hasPointerCapture(e.pointerId)) {
           this.canvas.releasePointerCapture(e.pointerId)
         }
-      } catch (_) {}
+      } catch (_) { }
 
       // Same out-of-order guard as pointerup: a stale cancel from a previous
       // pen stroke must not tear down the stroke that is currently active.
