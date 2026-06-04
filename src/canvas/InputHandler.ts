@@ -35,6 +35,9 @@ export class InputHandler {
 
   private mode: InputMode = 'idle'
   private activePenPointerId: number | null = null
+  // timeStamp of the active pen stroke's pointerdown. Used to reject stale
+  // pen events delivered out of order during fast successive strokes on iPad.
+  private activePenDownTime = 0
   private activeTouchCount = 0
 
   private initialPinchDist: number | null = null
@@ -85,9 +88,51 @@ export class InputHandler {
     return Math.sqrt(dx * dx + dy * dy) >= MIN_POINT_DISTANCE
   }
 
+  /**
+   * True if this pen event does not belong to the currently-active stroke.
+   * iPad Safari can deliver events out of order during fast lift+retouch
+   * (down2 before up1) and often reuses the same pointerId for every Pencil
+   * stroke, so a pointerId check alone is not enough — we also reject any
+   * event whose timeStamp predates the active stroke's pointerdown.
+   */
+  private isStalePenEvent(e: PointerEvent): boolean {
+    if (this.activePenPointerId === null) return false
+    if (e.pointerId !== this.activePenPointerId) return true
+    if (e.timeStamp < this.activePenDownTime) return true
+    return false
+  }
+
   public getPointPressure(e: PointerEvent): number {
     if (!this.config.isPressureEnabled()) return 0.5
     return e.pressure > 0 ? e.pressure : 0.5
+  }
+
+  /**
+   * Extract drawable points from a pointer event (including any high-frequency
+   * coalesced samples) and feed them to the active stroke.
+   *
+   * Used on pointerdown (seed the initial touch point), pointermove, AND
+   * pointerup. Reading coalesced events on pointerup matters because a fast
+   * Apple Pencil flick can fire pointerdown -> pointerup with NO pointermove
+   * in between — the movement only arrives bundled in the up event. Without
+   * this, such fast strokes collect <2 points and get dropped at commit.
+   */
+  private addStrokePoints(e: PointerEvent) {
+    const rect = this.canvas.getBoundingClientRect()
+    const coalesced = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : null
+    const events: PointerEvent[] = coalesced && coalesced.length ? coalesced : [e]
+
+    const points: Point[] = []
+    for (const ev of events) {
+      const w = this.transform.screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top)
+      const clamped = this.clampToPage(w.x, w.y)
+      if (this.shouldAddPoint(clamped.x, clamped.y)) {
+        const p = { x: clamped.x, y: clamped.y, pressure: this.getPointPressure(ev) }
+        points.push(p)
+        this.lastAddedPoint = p
+      }
+    }
+    if (points.length > 0) this.config.onStrokeMove(points)
   }
 
   private isOverCanvas(clientX: number, clientY: number): boolean {
@@ -111,6 +156,7 @@ export class InputHandler {
     }
 
     this.activePenPointerId = e.pointerId
+    this.activePenDownTime = e.timeStamp
     this.lastAddedPoint = null
 
     if (this.config.getActiveTool() === 'eraser') {
@@ -120,6 +166,9 @@ export class InputHandler {
     } else {
       this.mode = 'drawing-pen'
       this.config.onStrokeStart(e, false)
+      // Seed the touch-down point so the stroke always starts with a real
+      // sample, even if the first pointermove is late or never arrives.
+      this.addStrokePoints(e)
     }
   }
 
@@ -212,8 +261,6 @@ export class InputHandler {
     const onPointerMove = (e: PointerEvent) => {
       if (this.mode === 'idle') return
 
-      const rect = this.canvas.getBoundingClientRect()
-      
       if (this.mode === 'scrolling' && e.pointerType === 'touch') {
         const dx = e.clientX - this.lastTouchX
         const dy = e.clientY - this.lastTouchY
@@ -224,28 +271,14 @@ export class InputHandler {
       }
 
       if (this.mode === 'erasing') {
-        if (e.pointerType === 'pen' && e.pointerId !== this.activePenPointerId) return
+        if (e.pointerType === 'pen' && this.isStalePenEvent(e)) return
         this.handleEraserMove(e)
         return
       }
 
       if (this.mode === 'drawing-pen' || this.mode === 'drawing-finger') {
-        if (e.pointerType === 'pen' && e.pointerId !== this.activePenPointerId) return
-
-        const events = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e]
-        const points: Point[] = []
-        
-        for (const ev of events) {
-          const w = this.transform.screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top)
-          const clamped = this.clampToPage(w.x, w.y)
-          
-          if (this.shouldAddPoint(clamped.x, clamped.y)) {
-            const p = { x: clamped.x, y: clamped.y, pressure: this.getPointPressure(ev) }
-            points.push(p)
-            this.lastAddedPoint = p
-          }
-        }
-        if (points.length > 0) this.config.onStrokeMove(points)
+        if (e.pointerType === 'pen' && this.isStalePenEvent(e)) return
+        this.addStrokePoints(e)
       }
     }
 
@@ -258,7 +291,16 @@ export class InputHandler {
 
       if (e.pointerType === 'pen') {
         if (DEBUG_PENCIL) console.log(`[PENCIL] ↑ up id=${e.pointerId} mode=${this.mode}`);
-        if (this.mode === 'drawing-pen' || this.mode === 'erasing') {
+        // A stale pointerup from the previous stroke (delivered out of order
+        // during fast writing) must NOT finish the newly started stroke, or
+        // that new stroke is silently dropped and its moves ignored (mode=idle).
+        if (this.isStalePenEvent(e)) return
+        if (this.mode === 'drawing-pen') {
+          // Capture any movement that only arrived bundled in the up event
+          // (fast flicks fire down -> up with no intermediate pointermove).
+          this.addStrokePoints(e)
+          this.finishInput()
+        } else if (this.mode === 'erasing') {
           this.finishInput()
         }
         return
@@ -283,7 +325,11 @@ export class InputHandler {
           this.canvas.releasePointerCapture(e.pointerId)
         }
       } catch (_) {}
-      
+
+      // Same out-of-order guard as pointerup: a stale cancel from a previous
+      // pen stroke must not tear down the stroke that is currently active.
+      if (e.pointerType === 'pen' && this.isStalePenEvent(e)) return
+
       if (e.pointerType === 'touch') {
         this.activeTouchCount = Math.max(0, this.activeTouchCount - 1)
       }
@@ -304,32 +350,43 @@ export class InputHandler {
 
   private setupTouchEvents() {
     const onTouchStart = (e: TouchEvent) => {
+      // SCRIBBLE WORKAROUND (iPadOS 14+): With the system "Scribble" feature
+      // enabled, Safari silently drops Apple Pencil PointerEvents during fast
+      // successive strokes ("every other stroke goes missing"). The only known
+      // fix is to have a NON-passive touch handler that calls preventDefault on
+      // the drawing surface — this stops iPadOS from swallowing those events.
+      // Pointer events still fire after this, so finger/pen drawing is intact.
+      // Ref: https://mikepk.com/2020/10/iOS-safari-scribble-bug/
+      if (e.cancelable) e.preventDefault()
+
       if (e.touches.length === 2) {
         this.initialPinchDist = this.getPinchDistance(e.touches)
         this.initialZoom = this.transform.zoom
         const rect = this.canvas.getBoundingClientRect()
         this.lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left
         this.lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
-        e.preventDefault()
       }
     }
 
     const onTouchMove = (e: TouchEvent) => {
+      // Scribble workaround (see onTouchStart) — must preventDefault on every
+      // touchmove, not just during pinch, or fast Pencil strokes get dropped.
+      if (e.cancelable) e.preventDefault()
+
       if (e.touches.length === 2 && this.initialPinchDist !== null) {
         const currentDist = this.getPinchDistance(e.touches)
         const rawScale = currentDist / this.initialPinchDist
         const clampedScale = Math.min(Math.max(rawScale, 0.9), 1.1)
         const newZoom = this.initialZoom * clampedScale
-        
+
         const rect = this.canvas.getBoundingClientRect()
         const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
-        
+
         this.config.onZoom(newZoom, midX, midY)
         this.config.onPan((midX - this.lastMidX) * 0.7, (midY - this.lastMidY) * 0.7)
         this.lastMidX = midX
         this.lastMidY = midY
-        e.preventDefault()
       }
     }
 
@@ -353,6 +410,19 @@ export class InputHandler {
     this.canvasListeners['touchstart'] = onTouchStart as any
     this.canvasListeners['touchmove'] = onTouchMove as any
     this.canvasListeners['wheel'] = onWheel as any
+
+    // Document-level Scribble guard. The canvas listeners above only fire when
+    // the canvas is the touch target; attaching the same preventDefault at the
+    // document level guarantees the Scribble swallow-fix is active regardless
+    // of stacking/hit-testing, while leaving the toolbar fully interactive.
+    const onDocTouch = (e: TouchEvent) => {
+      if (e.target instanceof Element && e.target.closest('#main-toolbar')) return
+      if (e.cancelable) e.preventDefault()
+    }
+    document.addEventListener('touchstart', onDocTouch, { passive: false })
+    document.addEventListener('touchmove', onDocTouch, { passive: false })
+    this.documentListeners['touchstart'] = { fn: onDocTouch as any, options: { passive: false } }
+    this.documentListeners['touchmove'] = { fn: onDocTouch as any, options: { passive: false } }
   }
 
   public destroy() {

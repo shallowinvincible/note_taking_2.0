@@ -9,7 +9,7 @@ import { PageManager } from '@/canvas/PageManager'
 import { perf } from '@/canvas/PerformanceMonitor'
 import { useToolStore, invertStrokes } from '@/store/toolStore'
 import { useCanvasStore } from '@/store/canvasStore'
-import { computeBBox, type Point, type Stroke } from '@/types/stroke'
+import { computeBBox, genId, type Point, type Stroke } from '@/types/stroke'
 
 const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
@@ -450,7 +450,7 @@ export function useCanvas() {
 
         if (points.length > 1) {
           const stroke: Stroke = {
-            id: crypto.randomUUID(),
+            id: genId(),
             tool: useToolStore.getState().activeTool,
             color: useToolStore.getState().penColor,
             width: useToolStore.getState().penWidth,
