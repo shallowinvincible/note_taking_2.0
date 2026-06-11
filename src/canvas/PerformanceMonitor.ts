@@ -1,6 +1,9 @@
 export class PerformanceMonitor {
   private static instance: PerformanceMonitor;
-  public debugEnabled: boolean = true;
+  // Off by default. Per-frame / per-stroke console logging is real overhead on
+  // mobile Safari and was contributing to the lag. Flip to true only while
+  // actively profiling.
+  public debugEnabled: boolean = false;
 
   private frameCount: number = 0;
   private lastFpsUpdate: number = performance.now();

@@ -167,7 +167,11 @@ export class PageManager {
   }
 
   private pruneCache(start: number, end: number) {
-    const threshold = 5; // allow 5 pages buffer
+    // Keep only a small halo of pages around the viewport. Combined with the
+    // DPR-based buffer scale this caps total canvas memory at a level iOS Safari
+    // can sustain even in a 1000-page notebook (only ~6 page buffers are ever
+    // resident). Off-screen pages are re-rendered on demand when scrolled back.
+    const threshold = 2;
     for (const pageIndex of this.pages.keys()) {
       if (pageIndex < start - threshold || pageIndex > end + threshold) {
         this.pages.delete(pageIndex);

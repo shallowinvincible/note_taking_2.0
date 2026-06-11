@@ -26,7 +26,7 @@ export interface InputHandlerConfig {
 const PAGE_WIDTH_WORLD = 795
 const MIN_POINT_DISTANCE = 1.5
 
-const DEBUG_PENCIL = true
+const DEBUG_PENCIL = false
 
 export class InputHandler {
   private canvas: HTMLCanvasElement
@@ -189,12 +189,13 @@ export class InputHandler {
 
   private setupPointerEvents() {
     const onPointerDown = (e: PointerEvent) => {
-      // 1. EXCLUDE FLOATING UI FROM CAPTURE
-      if (e.target instanceof Element && (
-        e.target.closest('#main-toolbar') || 
-        e.target.closest('#header-left') || 
-        e.target.closest('#header-right')
-      )) return
+      // Only the drawing canvas starts canvas input. Any tap whose target is a
+      // floating UI element (toolbar, header buttons, the pages sidebar, its
+      // backdrop, etc.) is left alone so the button actually receives the tap.
+      // This is more robust than enumerating element ids and is what makes the
+      // back / undo / page buttons work on touch devices, where the canvas used
+      // to steal the touch via setPointerCapture/preventDefault.
+      if (e.target !== this.canvas) return
 
       this.lastPointerEvent = e
 
@@ -269,7 +270,9 @@ export class InputHandler {
       if (this.mode === 'scrolling' && e.pointerType === 'touch') {
         const dx = e.clientX - this.lastTouchX
         const dy = e.clientY - this.lastTouchY
-        this.config.onPan(dx * 0.6, dy * 0.6)
+        // 1:1 finger tracking — the page follows the finger exactly, which is
+        // what feels natural. The old 0.6 damping made scrolling feel sluggish.
+        this.config.onPan(dx, dy)
         this.lastTouchX = e.clientX
         this.lastTouchY = e.clientY
         return
@@ -380,16 +383,19 @@ export class InputHandler {
 
       if (e.touches.length === 2 && this.initialPinchDist !== null) {
         const currentDist = this.getPinchDistance(e.touches)
-        const rawScale = currentDist / this.initialPinchDist
-        const clampedScale = Math.min(Math.max(rawScale, 0.9), 1.1)
-        const newZoom = this.initialZoom * clampedScale
+        // True pinch-to-zoom: scale is measured against the gesture's starting
+        // spread, so the zoom tracks the fingers 1:1. The previous ±10%-per-frame
+        // clamp made pinching feel stiff and unresponsive. Absolute zoom is still
+        // bounded inside setZoomToward (0.2–5.0).
+        const scale = currentDist / this.initialPinchDist
+        const newZoom = this.initialZoom * scale
 
         const rect = this.canvas.getBoundingClientRect()
         const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left
         const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top
 
         this.config.onZoom(newZoom, midX, midY)
-        this.config.onPan((midX - this.lastMidX) * 0.7, (midY - this.lastMidY) * 0.7)
+        this.config.onPan(midX - this.lastMidX, midY - this.lastMidY)
         this.lastMidX = midX
         this.lastMidY = midY
       }
@@ -403,7 +409,7 @@ export class InputHandler {
           const rect = this.canvas.getBoundingClientRect()
           this.config.onZoom(this.transform.zoom * factor, e.clientX - rect.left, e.clientY - rect.top)
         } else {
-          this.config.onScroll(e.deltaY * 0.6)
+          this.config.onScroll(e.deltaY)
         }
       }
     }
@@ -421,7 +427,10 @@ export class InputHandler {
     // document level guarantees the Scribble swallow-fix is active regardless
     // of stacking/hit-testing, while leaving the toolbar fully interactive.
     const onDocTouch = (e: TouchEvent) => {
-      if (e.target instanceof Element && e.target.closest('#main-toolbar')) return
+      // Only swallow touches that land on the drawing canvas (the Scribble fix).
+      // Touches on any floating UI must pass through untouched, otherwise their
+      // tap/click is suppressed and buttons like Back / Pages stop working.
+      if (e.target !== this.canvas) return
       if (e.cancelable) e.preventDefault()
     }
     document.addEventListener('touchstart', onDocTouch, { passive: false })

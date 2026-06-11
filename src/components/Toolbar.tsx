@@ -71,11 +71,11 @@ export function Toolbar({
   ]
 
   return (
-    <div 
-      id="main-toolbar" 
-      className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex items-center px-4 py-2 rounded-full shadow-2xl transition-all border backdrop-blur-md pointer-events-auto select-none ${
-        darkMode 
-          ? 'bg-neutral-950/95 border-neutral-800 text-neutral-100 shadow-black/60' 
+    <div
+      id="main-toolbar"
+      className={`fixed left-1/2 -translate-x-1/2 z-[100] top-24 lg:top-6 max-w-[calc(100vw-1rem)] flex flex-wrap justify-center items-center gap-y-1 px-2 sm:px-4 py-2 rounded-3xl lg:rounded-full shadow-2xl transition-all border backdrop-blur-md pointer-events-auto select-none ${
+        darkMode
+          ? 'bg-neutral-950/95 border-neutral-800 text-neutral-100 shadow-black/60'
           : 'bg-white/95 border-neutral-200 text-neutral-800 shadow-neutral-300/50'
       }`}
     >

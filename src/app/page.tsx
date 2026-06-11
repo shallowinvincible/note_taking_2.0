@@ -212,8 +212,8 @@ export default function Home() {
           <ArrowLeft size={18} />
         </button>
 
-        {/* Notebook Meta card */}
-        <div className={`flex items-center gap-4 border px-5 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md ${darkMode
+        {/* Notebook Meta card — hidden on phones so the top corners never collide */}
+        <div className={`hidden md:flex items-center gap-4 border px-5 py-2.5 rounded-2xl shadow-2xl backdrop-blur-md ${darkMode
             ? 'bg-neutral-950/95 border-neutral-800 text-neutral-100 shadow-black/40'
             : 'bg-white/95 border-neutral-200 text-neutral-800 shadow-neutral-350/30'
           }`}>
@@ -312,7 +312,7 @@ export default function Home() {
 
         {/* Toggle Page Sidebar */}
         <button
-          onClick={() => setIsSidebarOpen(true)}
+          onClick={() => setIsSidebarOpen(o => !o)}
           className={`p-3 border rounded-2xl shadow-2xl backdrop-blur-md active:scale-95 transition-all flex items-center gap-2 ${darkMode
               ? 'bg-neutral-950/95 border-neutral-800 text-neutral-100 shadow-black/40 hover:bg-neutral-900'
               : 'bg-white/95 border-neutral-200 text-neutral-800 shadow-neutral-350/30 hover:bg-neutral-50'

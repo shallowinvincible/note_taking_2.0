@@ -18,7 +18,14 @@ import { createPage } from '@/storage/pages'
 
 const PAGE_WIDTH_WORLD = 795
 const A4_HEIGHT_WORLD = 1122
-const BUFFER_SCALE = 3.0
+// Each cached page is an OffscreenCanvas of (795*scale x 1122*scale). At the old
+// scale of 3 that was ~32 MB PER page, and with ~11 pages kept in memory iOS
+// Safari simply ran out of canvas memory and ground to a halt. Tie the buffer
+// resolution to the device pixel ratio (capped at 2) — that's enough to stay
+// crisp at the fit zoom while roughly halving memory per page.
+const BUFFER_SCALE = typeof window !== 'undefined'
+  ? Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)))
+  : 2
 
 export function useCanvas() {
   const bgCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -36,9 +43,15 @@ export function useCanvas() {
   const inputHandlerRef = useRef<InputHandler | null>(null)
   const renderPendingRef = useRef(false)
   const lastTimeRef = useRef(performance.now())
-  // Guards initializeCanvasView — only reset pan/zoom when a NEW page is opened,
-  // never when tool state (color, mode, dark mode, etc.) triggers a re-render.
-  const lastInitializedPageIdRef = useRef<string | null>(null)
+  // Guards initializeCanvasView — only reset pan/zoom when a NEW NOTEBOOK is
+  // opened, never when switching pages (continuous scroll) or when tool state
+  // (color, mode, dark mode, etc.) triggers a re-render.
+  const lastInitializedNotebookIdRef = useRef<string | null>(null)
+  // Prevents a burst of strokes near the bottom of the last page from spawning
+  // many blank pages at once.
+  const isExtendingRef = useRef(false)
+  // Per-page debounce timers for the Dexie thumbnail cache write.
+  const saveTimersRef = useRef<Map<string, any>>(new Map())
 
   const {
     activeTool, penColor, penWidth, eraserRadius, pressureEnabled,
@@ -58,6 +71,7 @@ export function useCanvas() {
   } = useNotebookStore()
   
   const pageId = activePage?.id || null
+  const notebookId = activeNotebook?.id || null
 
   // --- Rendering Architecture (Virtualized Tiled Rendering) ---
 
@@ -258,14 +272,26 @@ export function useCanvas() {
    * Buffers are created on-demand during the next render.
    */
   const extendPage = useCallback(async () => {
-    if (!activeNotebook) return
-    // AUTO-SPAWN NEW DISCRETE PAGE
-    const newPage = await createPage(activeNotebook.id, background)
-    const updatedList = [...pages, newPage]
-    setPages(updatedList)
-    setPageHeight(updatedList.length * A4_HEIGHT_WORLD)
-    setCurrentPageBottom(updatedList.length * A4_HEIGHT_WORLD)
-  }, [activeNotebook, background, pages, setPages, setPageHeight, setCurrentPageBottom])
+    // Lock against re-entry: without this, several strokes near the page bottom
+    // each pass the "reached the bottom" test before React state updates and we
+    // spawn a burst of blank pages — which is exactly what made the page counter
+    // fluctuate and the canvas flicker. Read fresh state from the stores rather
+    // than closed-over values so the lock and page math are always current.
+    if (isExtendingRef.current) return
+    const notebook = useNotebookStore.getState().activeNotebook
+    if (!notebook) return
+    isExtendingRef.current = true
+    try {
+      const bg = useToolStore.getState().background
+      const newPage = await createPage(notebook.id, bg)
+      const updatedList = [...useNotebookStore.getState().pages, newPage]
+      setPages(updatedList)
+      setPageHeight(updatedList.length * A4_HEIGHT_WORLD)
+      setCurrentPageBottom(updatedList.length * A4_HEIGHT_WORLD)
+    } finally {
+      isExtendingRef.current = false
+    }
+  }, [setPages, setPageHeight, setCurrentPageBottom])
 
   const scrollPageIntoView = useCallback((pageIndex: number) => {
     const targetY = pageIndex * A4_HEIGHT_WORLD - 40 / transformRef.current.zoom
@@ -416,16 +442,18 @@ export function useCanvas() {
   }, [redrawCachedLayerFromBuffer, renderBackgroundLayer, scheduleRender])
 
   useEffect(() => {
-    if (pageId && bgCanvasRef.current && committedCanvasRef.current) {
-      // Only reset zoom/pan when switching to a DIFFERENT page (or opening for the first time).
-      // If this effect re-runs because initializeCanvasView got a new reference due to a
-      // tool state change, the ref guard below prevents the view from jumping to the top.
-      if (pageId !== lastInitializedPageIdRef.current) {
-        lastInitializedPageIdRef.current = pageId
+    // Initialize (reset pan/zoom to the top) ONCE per notebook. In continuous-
+    // scroll mode every page lives on one tall canvas, so changing the active
+    // page must NOT re-init the view — otherwise tapping a page in the sidebar
+    // snaps straight back to the top of page 1. Page-to-page navigation is done
+    // by scrollToPage instead.
+    if (notebookId && bgCanvasRef.current && committedCanvasRef.current) {
+      if (notebookId !== lastInitializedNotebookIdRef.current) {
+        lastInitializedNotebookIdRef.current = notebookId
         initializeCanvasView()
       }
     }
-  }, [pageId, initializeCanvasView])
+  }, [notebookId, pageId, initializeCanvasView])
 
   // --- Input Handling Lifecycle (Requirement 1 - Stable Input) ---
 
@@ -462,7 +490,10 @@ export function useCanvas() {
         inputHandlerRef.current = null
       }
     }
-  }, [pageId]) // Empty dependency array means it only runs on mount/unmount
+    // Recreate only when the notebook (and therefore the canvas element) changes,
+    // NOT on every page switch — tearing the listeners down and rebuilding them
+    // mid-session is wasteful and can drop input.
+  }, [notebookId])
 
   // 2. Dynamic Configuration Updates
   useEffect(() => {
@@ -511,8 +542,8 @@ export function useCanvas() {
             if (committedCtx) {
               renderStroke(committedCtx, stroke, transformRef.current, 1.0, pressureEnabled);
             }
-            const triggerY = currentPageBottom - 561
-            if (stroke.bbox.maxY > triggerY) {
+            const freshBottom = useCanvasStore.getState().currentPageBottom
+            if (stroke.bbox.maxY > freshBottom - 561 && !isExtendingRef.current) {
               extendPage()
             }
             perf.endMeasure(commitStartTime, 'commitStroke-Async');
@@ -556,7 +587,10 @@ export function useCanvas() {
       },
       onRenderRequest: scheduleRender
     })
-  }, [pageHeight, currentPageBottom, extendPage, renderBackgroundLayer, redrawCachedLayerFromBuffer, renderWithErasePreview, setTransform, pressureEnabled, eraserRadius, darkMode, scheduleRender])
+    // notebookId is included so that when the InputHandler is recreated on a
+    // notebook switch (dummy config), this effect re-runs and applies the real
+    // callbacks to the new handler — otherwise drawing would silently no-op.
+  }, [notebookId, pageHeight, currentPageBottom, extendPage, renderBackgroundLayer, redrawCachedLayerFromBuffer, renderWithErasePreview, setTransform, pressureEnabled, eraserRadius, darkMode, scheduleRender])
 
   useEffect(() => {
     const inverted = invertStrokes(undoRedoRef.current.getStrokes(), darkMode)
@@ -626,29 +660,42 @@ export function useCanvas() {
 
         // Set up observers for new sessions
         for (const [pageId, session] of newSessions.entries()) {
-          const observer = async (event: Y.YArrayEvent<Stroke>) => {
+          const observer = (event: Y.YArrayEvent<Stroke>) => {
             if (!mounted) return
-            const currentStrokes = session.strokesArray.toArray()
             updateUndoRedoState()
 
+            // A locally-added stroke was already painted incrementally on commit;
+            // only remote / undo / erase changes need a full re-render here.
             if (event.transaction.origin !== 'local-add') {
               fullRedrawCachedLayer()
             }
 
+            // Persist to Dexie for the sidebar thumbnails — DEBOUNCED per page.
+            // The old code deleted and re-inserted EVERY stroke on the page on
+            // EVERY stroke, so writing turned into an O(n) IndexedDB rewrite per
+            // pen-up and the iPad fell over after a couple of pages. Yjs +
+            // y-indexeddb already persist the real data incrementally; this is
+            // only a thumbnail cache, so one write ~1s after the last change is
+            // plenty and keeps the write off the drawing hot path.
             setAutosaving(true)
-            try {
-              await db.transaction('rw', [db.strokes], async () => {
-                await db.strokes.where('pageId').equals(pageId).delete()
-                if (currentStrokes.length > 0) {
-                  const strokesToSave = currentStrokes.map((s: Stroke) => ({ ...s, pageId }))
-                  await db.strokes.bulkPut(strokesToSave)
-                }
-              })
-            } catch (err) {
-              console.error('Dexie save error:', err)
-            } finally {
-              setTimeout(() => setAutosaving(false), 500)
-            }
+            const existing = saveTimersRef.current.get(pageId)
+            if (existing) clearTimeout(existing)
+            saveTimersRef.current.set(pageId, setTimeout(async () => {
+              saveTimersRef.current.delete(pageId)
+              try {
+                const currentStrokes = session.strokesArray.toArray()
+                await db.transaction('rw', [db.strokes], async () => {
+                  await db.strokes.where('pageId').equals(pageId).delete()
+                  if (currentStrokes.length > 0) {
+                    await db.strokes.bulkPut(currentStrokes.map((s: Stroke) => ({ ...s, pageId })))
+                  }
+                })
+              } catch (err) {
+                console.error('Dexie save error:', err)
+              } finally {
+                if (mounted) setAutosaving(false)
+              }
+            }, 1000))
           }
           session.strokesArray.observe(observer)
           activeObserversRef.current.set(pageId, observer)
